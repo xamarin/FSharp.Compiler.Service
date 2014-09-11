@@ -469,7 +469,7 @@ type internal ErrorLoggerThatStopsOnFirstError(tcConfigB:TcConfigBuilder, fsiStd
         errors <- errors + 1
         if tcConfigB.abortOnError then exit 1 (* non-zero exit code *)
         // STOP ON FIRST ERROR (AVOIDS PARSER ERROR RECOVERY)
-        raise StopProcessing 
+        raise (StopProcessing (sprintf "%A" err))
     
     member x.CheckForErrors() = (errors > 0)
     member x.ResetErrorCount() = (errors <- 0)
@@ -490,9 +490,9 @@ type internal ErrorLoggerThatStopsOnFirstError(tcConfigB:TcConfigBuilder, fsiStd
     /// A helper function to check if its time to abort
     member x.AbortOnError() = 
         if errors > 0 then 
-            fprintf fsiConsoleOutput.Error  "%s" (FSIstrings.SR.stoppedDueToError())
+            fprintf fsiConsoleOutput.Error "%s" (FSIstrings.SR.stoppedDueToError())
             fsiConsoleOutput.Error.Flush()
-            raise StopProcessing 
+            raise (StopProcessing "")
 
 /// Get the directory name from a string, with some defaults if it doesn't have one
 let internal directoryName (s:string) = 
@@ -653,7 +653,7 @@ type internal FsiCommandLineOptions(fsiConfig: FsiEvaluationSessionHostConfig, a
            let abbrevArgs = abbrevFlagSet tcConfigB false
            ParseCompilerOptions collect fsiCompilerOptions (List.tail (PostProcessCompilerArgs abbrevArgs argv))
         with e ->
-            stopProcessingRecovery e range0; failwith "Error creating evaluation session"
+            stopProcessingRecovery e range0; failwithf "Error creating evaluation session: %A" e
         inputFilesAcc
 
 #if SILVERLIGHT
@@ -909,6 +909,7 @@ type internal FsiDynamicCompiler
                         ilGlobals: ILGlobals, 
                         fsiOptions : FsiCommandLineOptions,
                         fsiConsoleOutput : FsiConsoleOutput,
+                        fsiCollectible: bool,
                         niceNameGen,
                         resolvePath) = 
 
@@ -922,7 +923,7 @@ type internal FsiDynamicCompiler
 
     let valuePrinter = FsiValuePrinter(fsiConfig, ilGlobals, generateDebugInfo, resolvePath, outWriter)
 
-    let assemblyBuilder,moduleBuilder = ILRuntimeWriter.mkDynamicAssemblyAndModule (assemblyName, tcConfigB.optSettings.localOpt(), generateDebugInfo)
+    let assemblyBuilder,moduleBuilder = ILRuntimeWriter.mkDynamicAssemblyAndModule (assemblyName, tcConfigB.optSettings.localOpt(), generateDebugInfo, fsiCollectible)
 
     let rangeStdin = rangeN Lexhelp.stdinMockFilename 0
 
@@ -1090,7 +1091,8 @@ type internal FsiDynamicCompiler
         [mkSynId rangeStdin (FsiDynamicModulePrefix + sprintf "%04d" i)]
 
     member __.DynamicAssemblyName = assemblyName
-    member __.DynamicAssembly = (assemblyBuilder :> Assembly)
+
+    member __.DynamicAssembly = (assemblyBuilder :> Assembly)    
 
     member __.EvalParsedSourceFiles (istate, inputs) =
         let i = nextFragmentId()
@@ -1596,7 +1598,8 @@ module internal MagicAssemblyResolution =
 
 #if SILVERLIGHT
     let Install(_tcConfigB, _tcImports: TcImports, _fsiDynamicCompiler: FsiDynamicCompiler, _fsiConsoleOutput: FsiConsoleOutput) = 
-        ()
+        { new System.IDisposable  with 
+             member x.Dispose() = () }
         // // Look through the already loaded assemblies by hand. For some reason Assembly.Load
         // // doesn't find dynamically generated assemblies in Silverlight
         // System.AppDomain.CurrentDomain.add_AssemblyResolve(new System.ResolveEventHandler(fun _ args -> 
@@ -1608,8 +1611,14 @@ module internal MagicAssemblyResolution =
 
         let rangeStdin = rangeN Lexhelp.stdinMockFilename 0
 
-        AppDomain.CurrentDomain.add_AssemblyResolve(new ResolveEventHandler(fun _ args -> 
-            ResolveAssembly (rangeStdin, tcConfigB, tcImports, fsiDynamicCompiler, fsiConsoleOutput, args.Name)))
+        let handler = new ResolveEventHandler(fun _ args -> 
+            ResolveAssembly (rangeStdin, tcConfigB, tcImports, fsiDynamicCompiler, fsiConsoleOutput, args.Name))
+        
+        AppDomain.CurrentDomain.add_AssemblyResolve(handler)
+
+        { new System.IDisposable  with 
+             member x.Dispose() = AppDomain.CurrentDomain.remove_AssemblyResolve(handler) }
+
 
 
 #endif // SILVERLIGHT
@@ -2117,7 +2126,7 @@ type internal FsiInteractionProcessor
 
     member this.EvalScript(scriptPath) =
         // Todo: this runs the script as expected but errors are displayed one line to far in debugger
-        let sourceText = sprintf "#load \"%s\" " scriptPath
+        let sourceText = sprintf "#load @\"%s\" " scriptPath
         this.EvalInteraction sourceText
 
     member __.EvalExpression(sourceText) =
@@ -2313,7 +2322,7 @@ let internal DriveFsiEventLoop (fsiConfig: FsiEvaluationSessionHostConfig, fsiCo
 
 /// The primary type, representing a full F# Interactive session, reading from the given
 /// text input, writing to the given text output and error writers.
-type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:string[], inReader:TextReader, outWriter:TextWriter, errorWriter: TextWriter) = 
+type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:string[], inReader:TextReader, outWriter:TextWriter, errorWriter: TextWriter, fsiCollectible: bool) = 
 #if SILVERLIGHT
     do
         Microsoft.FSharp.Core.Printf.setWriter outWriter
@@ -2433,15 +2442,18 @@ type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:strin
 
     let fsiConsoleInput = FsiConsoleInput(fsiConfig, fsiOptions, inReader, outWriter)
 
-    let tcGlobals,tcImports =  
-#if SILVERLIGHT
-      TcImports.BuildTcImports(tcConfigP) 
-#else
+    let (tcGlobals,frameworkTcImports,nonFrameworkResolutions,unresolvedReferences) = 
+        try 
+            let tcConfig = tcConfigP.Get()
+            IncrementalFSharpBuild.GetFrameworkTcImports tcConfig
+        with e -> 
+            stopProcessingRecovery e range0; failwithf "Error creating evaluation session: %A" e
+
+    let tcImports =  
       try 
-          TcImports.BuildTcImports(tcConfigP) 
+          TcImports.BuildNonFrameworkTcImports(None, tcConfigP,tcGlobals,frameworkTcImports,nonFrameworkResolutions,unresolvedReferences)
       with e -> 
-          stopProcessingRecovery e range0; failwith "Error creating evaluation session"
-#endif
+          stopProcessingRecovery e range0; failwithf "Error creating evaluation session: %A" e
 
     let ilGlobals  = tcGlobals.ilg
 
@@ -2492,11 +2504,11 @@ type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:strin
           
 #endif
        
-    let rec fsiDynamicCompiler = FsiDynamicCompiler(fsiConfig, timeReporter, tcConfigB, tcLockObject, errorLogger, outWriter, tcImports, tcGlobals, ilGlobals, fsiOptions, fsiConsoleOutput, niceNameGen, resolveType (fun () -> fsiDynamicCompiler) ) 
+    let rec fsiDynamicCompiler = FsiDynamicCompiler(fsiConfig, timeReporter, tcConfigB, tcLockObject, errorLogger, outWriter, tcImports, tcGlobals, ilGlobals, fsiOptions, fsiConsoleOutput, fsiCollectible, niceNameGen, resolveType (fun () -> fsiDynamicCompiler) ) 
     
     let fsiInterruptController = FsiInterruptController(fsiOptions, fsiConsoleOutput) 
     
-    do MagicAssemblyResolution.Install(tcConfigB, tcImports, fsiDynamicCompiler, fsiConsoleOutput)
+    let uninstallMagicAssemblyResolution = MagicAssemblyResolution.Install(tcConfigB, tcImports, fsiDynamicCompiler, fsiConsoleOutput)
     
     /// This reference cell holds the most recent interactive state 
     let initialInteractiveState = fsiDynamicCompiler.GetInitialInteractiveState ()
@@ -2508,6 +2520,11 @@ type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:strin
     /// The single, global interactive checker that can be safely used in conjunction with other operations
     /// on the FsiEvaluationSession.  
     let checker = InteractiveChecker.Create()
+
+    interface IDisposable with 
+        member x.Dispose() = 
+            (tcImports :> IDisposable).Dispose()
+            uninstallMagicAssemblyResolution.Dispose()
 
     /// Load the dummy interaction, load the initial files, and,
     /// if interacting, start the background thread to read the standard input.
@@ -2539,7 +2556,7 @@ type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:strin
                     errorLogger.SetError()
                     try 
                         errorLogger.AbortOnError() 
-                    with StopProcessing -> 
+                    with StopProcessing _ -> 
                         // BUG 664864: Watson Clr20r3 across buckets with: Application FSIAnyCPU.exe from Dev11 RTM; Exception AE251Y0L0P2WC0QSWDZ0E2IDRYQTDSVB; FSIANYCPU.NI.EXE!Microsoft.FSharp.Compiler.Interactive.Shell+threadException
                         // reason: some window that use System.Windows.Forms.DataVisualization types (possible FSCharts) was created in FSI.
                         // at some moment one chart has raised InvalidArgumentException from OnPaint, this exception was intercepted by the code in higher layer and 
@@ -2688,7 +2705,11 @@ type FsiEvaluationSession (fsiConfig: FsiEvaluationSessionHostConfig, argv:strin
 
 #endif // SILVERLIGHT
 
-    static member Create(fsiConfig, argv, inReader, outWriter, errorWriter) = new FsiEvaluationSession(fsiConfig, argv, inReader, outWriter, errorWriter)
+    new (fsiConfig, argv, inReader, outWriter, errorWriter) = 
+        new FsiEvaluationSession (fsiConfig, argv, inReader, outWriter, errorWriter, fsiCollectible=false)
+
+    static member Create(fsiConfig, argv, inReader, outWriter, errorWriter, ?collectible) = 
+        new FsiEvaluationSession(fsiConfig, argv, inReader, outWriter, errorWriter, defaultArg collectible false)
 
     static member GetDefaultConfiguration(fsiObj:obj) =  FsiEvaluationSession.GetDefaultConfiguration(fsiObj, true)
     static member GetDefaultConfiguration(fsiObj:obj, useFsiAuxLib) = 

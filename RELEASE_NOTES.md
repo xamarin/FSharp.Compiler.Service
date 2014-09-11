@@ -239,3 +239,18 @@
 #### 0.0.58 - 
 * Fix for #156 - The FSharp.Core should be retrieved from the hosting environment
 
+#### 0.0.59 - 
+* Fix for #184 - Fix EvalScript by using verbatim string for #Load  
+* Fix for #183 - The line no. reporting is still using 0-based indexes in errors. This is confusing.
+
+#### 0.0.60 - 
+* #207 - Add IsLiteral/LiteralValue to FSharpField 
+* #205 - Add IsOptionalArg and related properties to FSharpParameter 
+* #210 - Check default/override members via 'IsOverrideOrExplicitMember' 
+* #209 - Add TryFullName to FSharpEntity 
+
+#### 0.0.61 - 
+* #216 - Return associated getters/setters from F# properties  
+* #214 - Added missing XmlDocSig for FSharpMemberFunctionOrValue's Events, Methods and Properties  
+* #213 - Retrieve information for all active pattern cases  
+* #188 - Fix leak in file handles when using multiple instances of FsiEvaluationSession, and add optionally collectible assemblies

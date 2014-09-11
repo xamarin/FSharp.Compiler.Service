@@ -1,5 +1,5 @@
 ﻿#if INTERACTIVE
-#r "../../bin/v45/FSharp.Compiler.Service.dll"
+#r "../../bin/v4.5/FSharp.Compiler.Service.dll"
 #r "../../packages/NUnit.2.6.3/lib/nunit.framework.dll"
 #load "FsUnit.fs"
 #load "Common.fs"
@@ -45,6 +45,8 @@ let attribsOfSymbol (s:FSharpSymbol) =
             if v.IsMutable then yield "mutable"
             if v.IsVolatile then yield "volatile"
             if v.IsStatic then yield "static"
+            if v.IsLiteral then yield sprintf "%A" v.LiteralValue.Value
+
 
         | :? FSharpEntity as v -> 
             if v.IsNamespace then yield "namespace"
@@ -82,6 +84,7 @@ let attribsOfSymbol (s:FSharpSymbol) =
             if v.IsCompilerGenerated then yield "compgen"
             if v.IsImplicitConstructor then yield "ctor"
             if v.IsMutable then yield "mutable" 
+            if v.IsOverrideOrExplicitMember then yield "overridemem"
         | _ -> () ]
 
 module Project1 = 
@@ -191,6 +194,20 @@ let ``Test project1 whole project errors`` () =
     wholeProjectResults.Errors.[0].StartColumn |> shouldEqual 43
     wholeProjectResults.Errors.[0].EndColumn |> shouldEqual 44
 
+[<Test>]
+let ``Test project1 should have protected FullName and TryFullName return same results`` () =
+    let wholeProjectResults = checker.ParseAndCheckProject(Project1.options) |> Async.RunSynchronously
+    let rec getFullNameComparisons (entity: FSharpEntity) = 
+        seq { if not entity.IsProvided && entity.Accessibility.IsPublic then
+                yield (entity.TryFullName = try Some entity.FullName with _ -> None)
+                for e in entity.NestedEntities do
+                    yield! getFullNameComparisons e }
+  
+    wholeProjectResults.ProjectContext.GetReferencedAssemblies()
+    |> List.map (fun asm -> asm.Contents.Entities)
+    |> Seq.collect (Seq.collect getFullNameComparisons)
+    |> Seq.iter (shouldEqual true)
+
 [<Test; Ignore "FCS should not throw exceptions on FSharpEntity.BaseType">]
 let ``Test project1 should not throw exceptions on entities from referenced assemblies`` () =
     let wholeProjectResults = checker.ParseAndCheckProject(Project1.options) |> Async.RunSynchronously
@@ -273,8 +290,8 @@ let ``Test project1 all symbols`` () =
            ("field x", "file2", (20, 16), (20, 17), ["field"; "default"; "mutable"]);
            ("SaveOptions", "file2", (27, 5), (27, 16), ["enum"; "valuetype"]);
            ("field value__", "file2", (28, 2), (29, 25), ["field"; "compgen"]);
-           ("field None", "file2", (28, 4), (28, 8), ["field"; "static"]);
-           ("field DisableFormatting", "file2", (29, 4), (29, 21), ["field"; "static"]);
+           ("field None", "file2", (28, 4), (28, 8), ["field"; "static"; "0"]);
+           ("field DisableFormatting", "file2", (29, 4), (29, 21), ["field"; "static"; "1"]);
            ("M", "file1", (2, 7), (2, 8), ["module"]);
            ("val xxx", "file1", (7, 4), (7, 7), ["val"]);
            ("val fff", "file1", (8, 4), (8, 7), ["val"]);
@@ -324,8 +341,8 @@ let ``Test project1 all symbols`` () =
            ("field x", "file2", (20, 16), (20, 17), ["field"; "default"; "mutable"]);
            ("SaveOptions", "file2", (27, 5), (27, 16), ["enum"; "valuetype"]);
            ("field value__", "file2", (28, 2), (29, 25), ["field"; "compgen"]);
-           ("field None", "file2", (28, 4), (28, 8), ["field"; "static"]);
-           ("field DisableFormatting", "file2", (29, 4), (29, 21), ["field"; "static"]);
+           ("field None", "file2", (28, 4), (28, 8), ["field"; "static"; "0"]);
+           ("field DisableFormatting", "file2", (29, 4), (29, 21), ["field"; "static"; "1"]);
            ("M", "file1", (2, 7), (2, 8), ["module"]);
            ("val xxx", "file1", (7, 4), (7, 7), ["val"]);
            ("val fff", "file1", (8, 4), (8, 7), ["val"]);
@@ -554,15 +571,15 @@ let ``Test project1 all uses of all symbols`` () =
                ("pair2", "N.pair2", "file2", ((23, 10), (23, 15)), ["val"]);
                ("pair1", "N.pair1", "file2", ((23, 4), (23, 9)), ["val"]);
                ("None", "N.SaveOptions.None", "file2", ((27, 4), (27, 8)),
-                ["field"; "static"]);
+                ["field"; "static"; "0"]);
                ("DisableFormatting", "N.SaveOptions.DisableFormatting", "file2",
-                ((28, 4), (28, 21)), ["field"; "static"]);
+                ((28, 4), (28, 21)), ["field"; "static"; "1"]);
                ("SaveOptions", "N.SaveOptions", "file2", ((26, 5), (26, 16)),
                 ["enum"; "valuetype"]);
                ("SaveOptions", "N.SaveOptions", "file2", ((30, 16), (30, 27)),
                 ["enum"; "valuetype"]);
                ("DisableFormatting", "N.SaveOptions.DisableFormatting", "file2",
-                ((30, 16), (30, 45)), ["field"; "static"]);
+                ((30, 16), (30, 45)), ["field"; "static"; "1"]);
                ("enumValue", "N.enumValue", "file2", ((30, 4), (30, 13)), ["val"]);
                ("x", "x", "file2", ((32, 9), (32, 10)), []);
                ("y", "y", "file2", ((32, 11), (32, 12)), []);
@@ -1005,51 +1022,79 @@ let ``Test project3 all symbols in signature`` () =
     let allSymbols = allSymbolsInEntities false wholeProjectResults.AssemblySignature.Entities
     [ for x in allSymbols -> x.ToString(), attribsOfSymbol x ] 
       |> shouldEqual 
-              [("M", ["module"]); ("val IFooImplObjectExpression", ["val"]);
-               ("val CFooImplObjectExpression", ["val"]); ("val getP", ["val"]);
-               ("val setP", ["val"]); ("val getE", ["val"]); ("val getM", ["val"]);
-               ("IFoo", ["interface"]);
-               ("member InterfaceMethod", ["slot"; "member"]);
-               ("member add_InterfaceEvent", ["slot"; "member"; "add" ]);
-               ("member get_InterfaceEvent", ["slot"; "member"; "getter"]);
-               ("member get_InterfaceProperty", ["slot"; "member"; "getter"]);
-               ("member remove_InterfaceEvent", ["slot"; "member"; "remove" ]);
-               ("member set_InterfacePropertySet", ["slot"; "member"; "setter"]);
-               ("property InterfacePropertySet", ["slot"; "member"; "prop"]);
-               ("property InterfaceProperty", ["slot"; "member"; "prop"]);
-               ("property InterfaceEvent", ["slot"; "member"; "prop"]);
-               ("CFoo", ["class"]); ("member .ctor", ["member"; "ctor"]);
-               ("member AbstractClassMethod", ["slot"; "member"]);
-               ("member add_AbstractClassEvent", ["slot"; "member"; "add" ]);
-               ("member get_AbstractClassEvent", ["slot"; "member"; "getter"]);
-               ("member get_AbstractClassProperty", ["slot"; "member"; "getter"]);
-               ("member remove_AbstractClassEvent", ["slot"; "member"; "remove"]);
-               ("member set_AbstractClassPropertySet", ["slot"; "member"; "setter"]);
-               ("property AbstractClassPropertySet", ["slot"; "member"; "prop"]);
-               ("property AbstractClassProperty", ["slot"; "member"; "prop"]);
-               ("property AbstractClassEvent", ["slot"; "member"; "prop"]);
-               ("CBaseFoo", ["class"]); ("member .ctor", ["member"; "ctor"]);
-               ("member BaseClassMethod", ["slot"; "member"]);
-               ("member add_BaseClassEvent", ["slot"; "member"; "add"]);
-               ("member get_BaseClassEvent", ["slot"; "member"; "getter"]);
-               ("member get_BaseClassProperty", ["slot"; "member"; "getter"]);
-               ("member remove_BaseClassEvent", ["slot"; "member"; "remove"]);
-               ("member set_BaseClassPropertySet", ["slot"; "member"; "setter"]);
-               ("property BaseClassPropertySet", ["member"; "prop"]);
-               ("property BaseClassPropertySet", ["slot"; "member"; "prop"]);
-               ("property BaseClassProperty", ["member"; "prop"]);
-               ("property BaseClassProperty", ["slot"; "member"; "prop"]);
-               ("property BaseClassEvent", ["member"; "prop"]);
-               ("property BaseClassEvent", ["slot"; "member"; "prop"]);
-               ("IFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
-               ("CFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
-               ("property AbstractClassPropertySet", ["member"; "prop"]);
-               ("property AbstractClassProperty", ["member"; "prop"]);
-               ("property AbstractClassEvent", ["member"; "prop"]);
-               ("CBaseFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
-               ("property BaseClassPropertySet", ["member"; "prop"]);
-               ("property BaseClassProperty", ["member"; "prop"]);
-               ("property BaseClassEvent", ["member"; "prop"])]
+            [("M", ["module"]); 
+             ("val IFooImplObjectExpression", ["val"]);
+             ("val CFooImplObjectExpression", ["val"]); 
+             ("val getP", ["val"]);
+             ("val setP", ["val"]); ("val getE", ["val"]); 
+             ("val getM", ["val"]);
+             ("IFoo", ["interface"]); 
+             ("member InterfaceMethod", ["slot"; "member"]);
+             ("member add_InterfaceEvent", ["slot"; "member"; "add"]);
+             ("member get_InterfaceEvent", ["slot"; "member"; "getter"]);
+             ("member get_InterfaceProperty", ["slot"; "member"; "getter"]);
+             ("member remove_InterfaceEvent", ["slot"; "member"; "remove"]);
+             ("member set_InterfacePropertySet", ["slot"; "member"; "setter"]);
+             ("property InterfacePropertySet", ["slot"; "member"; "prop"]);
+             ("property InterfaceProperty", ["slot"; "member"; "prop"]);
+             ("property InterfaceEvent", ["slot"; "member"; "prop"]); 
+             ("CFoo", ["class"]);
+             ("member .ctor", ["member"; "ctor"]);
+             ("member AbstractClassMethod", ["slot"; "member"]);
+             ("member add_AbstractClassEvent", ["slot"; "member"; "add"]);
+             ("member get_AbstractClassEvent", ["slot"; "member"; "getter"]);
+             ("member get_AbstractClassProperty", ["slot"; "member"; "getter"]);
+             ("member remove_AbstractClassEvent", ["slot"; "member"; "remove"]);
+             ("member set_AbstractClassPropertySet", ["slot"; "member"; "setter"]);
+             ("property AbstractClassPropertySet", ["slot"; "member"; "prop"]);
+             ("property AbstractClassProperty", ["slot"; "member"; "prop"]);
+             ("property AbstractClassEvent", ["slot"; "member"; "prop"]);
+             ("CBaseFoo", ["class"]); ("member .ctor", ["member"; "ctor"]);
+             ("member BaseClassMethod", ["slot"; "member"]);
+             ("member BaseClassMethod", ["member"; "overridemem"]);
+             ("member add_BaseClassEvent", ["slot"; "member"; "add"]);
+             ("member add_BaseClassEvent", ["member"; "add"; "overridemem"]);
+             ("member get_BaseClassEvent", ["slot"; "member"; "getter"]);
+             ("member get_BaseClassEvent", ["member"; "getter"; "overridemem"]);
+             ("member get_BaseClassProperty", ["slot"; "member"; "getter"]);
+             ("member get_BaseClassProperty", ["member"; "getter"; "overridemem"]);
+             ("member remove_BaseClassEvent", ["slot"; "member"; "remove"]);
+             ("member remove_BaseClassEvent", ["member"; "remove"; "overridemem"]);
+             ("member set_BaseClassPropertySet", ["slot"; "member"; "setter"]);
+             ("member set_BaseClassPropertySet", ["member"; "setter"; "overridemem"]);
+             ("property BaseClassPropertySet", ["member"; "prop"; "overridemem"]);
+             ("property BaseClassPropertySet", ["slot"; "member"; "prop"]);
+             ("property BaseClassProperty", ["member"; "prop"; "overridemem"]);
+             ("property BaseClassProperty", ["slot"; "member"; "prop"]);
+             ("property BaseClassEvent", ["member"; "prop"; "overridemem"]);
+             ("property BaseClassEvent", ["slot"; "member"; "prop"]);
+             ("IFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
+             ("member InterfaceMethod", ["member"; "overridemem"]);
+             ("member add_InterfaceEvent", ["member"; "overridemem"]);
+             ("member get_InterfaceEvent", ["member"; "overridemem"]);
+             ("member get_InterfaceProperty", ["member"; "overridemem"]);
+             ("member remove_InterfaceEvent", ["member"; "overridemem"]);
+             ("member set_InterfacePropertySet", ["member"; "overridemem"]);
+             ("CFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
+             ("member AbstractClassMethod", ["member"; "overridemem"]);
+             ("member add_AbstractClassEvent", ["member"; "add"; "overridemem"]);
+             ("member get_AbstractClassEvent", ["member"; "getter"; "overridemem"]);
+             ("member get_AbstractClassProperty", ["member"; "getter"; "overridemem"]);
+             ("member remove_AbstractClassEvent", ["member"; "remove"; "overridemem"]);
+             ("member set_AbstractClassPropertySet", ["member"; "setter"; "overridemem"]);
+             ("property AbstractClassPropertySet", ["member"; "prop"; "overridemem"]);
+             ("property AbstractClassProperty", ["member"; "prop"; "overridemem"]);
+             ("property AbstractClassEvent", ["member"; "prop"; "overridemem"]);
+             ("CBaseFooImpl", ["class"]); ("member .ctor", ["member"; "ctor"]);
+             ("member BaseClassMethod", ["member"; "overridemem"]);
+             ("member add_BaseClassEvent", ["member"; "add"; "overridemem"]);
+             ("member get_BaseClassEvent", ["member"; "getter"; "overridemem"]);
+             ("member get_BaseClassProperty", ["member"; "getter"; "overridemem"]);
+             ("member remove_BaseClassEvent", ["member"; "remove"; "overridemem"]);
+             ("member set_BaseClassPropertySet", ["member"; "setter"; "overridemem"]);
+             ("property BaseClassPropertySet", ["member"; "prop"; "overridemem"]);
+             ("property BaseClassProperty", ["member"; "prop"; "overridemem"]);
+             ("property BaseClassEvent", ["member"; "prop"; "overridemem"])]
 
 [<Test>]
 let ``Test project3 all uses of all signature symbols`` () = 
@@ -1064,209 +1109,230 @@ let ``Test project3 all uses of all signature symbols`` () =
                              tupsZ s.RangeAlternate, attribsOfSymbolUse s, attribsOfSymbol s.Symbol) ]
              yield s.ToString(), uses ]
     let expected =      
-              [("M", [("file1", ((1, 7), (1, 8)), ["defn"], ["module"])]);
-               ("val IFooImplObjectExpression",
-                [("file1", ((58, 4), (58, 28)), ["defn"], ["val"])]);
-               ("val CFooImplObjectExpression",
-                [("file1", ((67, 4), (67, 28)), ["defn"], ["val"])]);
-               ("val getP", [("file1", ((76, 4), (76, 8)), ["defn"], ["val"])]);
-               ("val setP", [("file1", ((77, 4), (77, 8)), ["defn"], ["val"])]);
-               ("val getE", [("file1", ((78, 4), (78, 8)), ["defn"], ["val"])]);
-               ("val getM", [("file1", ((79, 4), (79, 8)), ["defn"], ["val"])]);
-               ("IFoo",
-                [("file1", ((3, 5), (3, 9)), ["defn"], ["interface"]);
-                 ("file1", ((33, 14), (33, 18)), ["type"], ["interface"]);
-                 ("file1", ((60, 10), (60, 14)), ["type"], ["interface"]);
-                 ("file1", ((76, 15), (76, 19)), ["type"], ["interface"]);
-                 ("file1", ((77, 15), (77, 19)), ["type"], ["interface"]);
-                 ("file1", ((78, 15), (78, 19)), ["type"], ["interface"]);
-                 ("file1", ((79, 15), (79, 19)), ["type"], ["interface"])]);
-               ("member InterfaceMethod",
-                [("file1", ((6, 13), (6, 28)), ["defn"], ["slot"; "member"]);
-                 ("file1", ((63, 20), (63, 35)), ["override"], ["slot"; "member"]);
-                 ("file1", ((79, 23), (79, 42)), [], ["slot"; "member"]);
-                 ("file1", ((36, 20), (36, 35)), ["override"], ["slot"; "member"])]);
-               ("member add_InterfaceEvent",
-                [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "add"]);
-                 ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "add"]);
-                 ("file1", ((78, 23), (78, 41)), [], ["slot"; "member"; "add"]);
-                 ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "add"])]);
-               ("member get_InterfaceEvent",
-                [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((65, 20), (65, 34)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((38, 20), (38, 34)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member get_InterfaceProperty",
-                [("file1", ((4, 13), (4, 30)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((61, 20), (61, 37)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((76, 23), (76, 44)), [], ["slot"; "member"; "getter"]);
-                 ("file1", ((34, 20), (34, 37)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member remove_InterfaceEvent",
-                [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "remove"]);
-                 ("file1", ((65, 20), (65, 34)), ["override"],
-                  ["slot"; "member"; "remove"]);
-                 ("file1", ((38, 20), (38, 34)), ["override"],
-                  ["slot"; "member"; "remove"])]);
-               ("member set_InterfacePropertySet",
-                [("file1", ((5, 13), (5, 33)), ["defn"], ["slot"; "member"; "setter"]);
-                 ("file1", ((62, 20), (62, 40)), ["override"],
-                  ["slot"; "member"; "setter"]);
-                 ("file1", ((77, 25), (77, 49)), [], ["slot"; "member"; "setter"]);
-                 ("file1", ((35, 20), (35, 40)), ["override"],
-                  ["slot"; "member"; "setter"])]);
-               ("property InterfacePropertySet",
-                [("file1", ((5, 13), (5, 33)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((62, 20), (62, 40)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((77, 25), (77, 49)), [], ["slot"; "member"; "prop"]);
-                 ("file1", ((35, 20), (35, 40)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property InterfaceProperty",
-                [("file1", ((4, 13), (4, 30)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((61, 20), (61, 37)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((76, 23), (76, 44)), [], ["slot"; "member"; "prop"]);
-                 ("file1", ((34, 20), (34, 37)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property InterfaceEvent",
-                [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "prop"])]);
-               ("CFoo",
-                [("file1", ((11, 5), (11, 9)), ["defn"], ["class"]);
-                 ("file1", ((41, 12), (41, 16)), ["type"], ["class"]);
-                 ("file1", ((41, 12), (41, 16)), [], ["class"]);
-                 ("file1", ((69, 10), (69, 14)), ["type"], ["class"]);
-                 ("file1", ((69, 10), (69, 14)), [], ["class"])]);
-               ("member .ctor",
-                [("file1", ((11, 5), (11, 9)), ["defn"], ["member"; "ctor"]);
-                 ("file1", ((41, 12), (41, 16)), ["type"], ["member"; "ctor"]);
-                 ("file1", ((41, 12), (41, 16)), [], ["member"; "ctor"]);
-                 ("file1", ((69, 10), (69, 14)), ["type"], ["member"; "ctor"]);
-                 ("file1", ((69, 10), (69, 14)), [], ["member"; "ctor"])]);
-               ("member AbstractClassMethod",
-                [("file1", ((14, 13), (14, 32)), ["defn"], ["slot"; "member"]);
-                 ("file1", ((72, 22), (72, 41)), ["override"], ["slot"; "member"]);
-                 ("file1", ((45, 18), (45, 37)), ["override"], ["slot"; "member"])]);
-               ("member add_AbstractClassEvent",
-                [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "add"]);
-                 ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "add"]);
-                 ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "add"])]);
-               ("member get_AbstractClassEvent",
-                [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((74, 22), (74, 40)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((47, 18), (47, 36)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member get_AbstractClassProperty",
-                [("file1", ((12, 13), (12, 34)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((70, 22), (70, 43)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((43, 18), (43, 39)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member remove_AbstractClassEvent",
-                [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "remove"]);
-                 ("file1", ((74, 22), (74, 40)), ["override"],
-                  ["slot"; "member"; "remove"]);
-                 ("file1", ((47, 18), (47, 36)), ["override"],
-                  ["slot"; "member"; "remove"])]);
-               ("member set_AbstractClassPropertySet",
-                [("file1", ((13, 13), (13, 37)), ["defn"], ["slot"; "member"; "setter"]);
-                 ("file1", ((71, 22), (71, 46)), ["override"],
-                  ["slot"; "member"; "setter"]);
-                 ("file1", ((44, 18), (44, 42)), ["override"],
-                  ["slot"; "member"; "setter"])]);
-               ("property AbstractClassPropertySet",
-                [("file1", ((13, 13), (13, 37)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((71, 22), (71, 46)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((44, 18), (44, 42)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property AbstractClassProperty",
-                [("file1", ((12, 13), (12, 34)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((70, 22), (70, 43)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((43, 18), (43, 39)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property AbstractClassEvent",
-                [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "prop"])]);
-               ("CBaseFoo",
-                [("file1", ((18, 5), (18, 13)), ["defn"], ["class"]);
-                 ("file1", ((50, 12), (50, 20)), ["type"], ["class"]);
-                 ("file1", ((50, 12), (50, 20)), [], ["class"])]);
-               ("member .ctor",
-                [("file1", ((18, 5), (18, 13)), ["defn"], ["member"; "ctor"]);
-                 ("file1", ((50, 12), (50, 20)), ["type"], ["member"; "ctor"]);
-                 ("file1", ((50, 12), (50, 20)), [], ["member"; "ctor"])]);
-               ("member BaseClassMethod",
-                [("file1", ((22, 13), (22, 28)), ["defn"], ["slot"; "member"]);
-                 ("file1", ((27, 15), (27, 30)), ["override"], ["slot"; "member"]);
-                 ("file1", ((54, 18), (54, 33)), ["override"], ["slot"; "member"])]);
-               ("member add_BaseClassEvent",
-                [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "add"]);
-                 ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "add"]);
-                 ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "add"])]);
-               ("member get_BaseClassEvent",
-                [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((29, 15), (29, 29)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((56, 18), (56, 32)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member get_BaseClassProperty",
-                [("file1", ((20, 13), (20, 30)), ["defn"], ["slot"; "member"; "getter"]);
-                 ("file1", ((25, 15), (25, 32)), ["override"],
-                  ["slot"; "member"; "getter"]);
-                 ("file1", ((52, 18), (52, 35)), ["override"],
-                  ["slot"; "member"; "getter"])]);
-               ("member remove_BaseClassEvent",
-                [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "remove"]);
-                 ("file1", ((29, 15), (29, 29)), ["override"],
-                  ["slot"; "member"; "remove"]);
-                 ("file1", ((56, 18), (56, 32)), ["override"],
-                  ["slot"; "member"; "remove"])]);
-               ("member set_BaseClassPropertySet",
-                [("file1", ((21, 13), (21, 33)), ["defn"], ["slot"; "member"; "setter"]);
-                 ("file1", ((26, 15), (26, 35)), ["override"],
-                  ["slot"; "member"; "setter"]);
-                 ("file1", ((53, 18), (53, 38)), ["override"],
-                  ["slot"; "member"; "setter"])]);
-               ("property BaseClassPropertySet",
-                [("file1", ((26, 15), (26, 35)), ["defn"], ["member"; "prop"])]);
-               ("property BaseClassPropertySet",
-                [("file1", ((21, 13), (21, 33)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((26, 15), (26, 35)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((53, 18), (53, 38)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property BaseClassProperty",
-                [("file1", ((25, 15), (25, 32)), ["defn"], ["member"; "prop"])]);
-               ("property BaseClassProperty",
-                [("file1", ((20, 13), (20, 30)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((25, 15), (25, 32)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((52, 18), (52, 35)), ["override"], ["slot"; "member"; "prop"])]);
-               ("property BaseClassEvent",
-                [("file1", ((29, 15), (29, 29)), ["defn"], ["member"; "prop"])]);
-               ("property BaseClassEvent",
-                [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "prop"]);
-                 ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "prop"]);
-                 ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "prop"])]);
-               ("IFooImpl", [("file1", ((31, 5), (31, 13)), ["defn"], ["class"])]);
-               ("member .ctor",
-                [("file1", ((31, 5), (31, 13)), ["defn"], ["member"; "ctor"])]);
-               ("CFooImpl", [("file1", ((40, 5), (40, 13)), ["defn"], ["class"])]);
-               ("member .ctor",
-                [("file1", ((40, 5), (40, 13)), ["defn"], ["member"; "ctor"])]);
-               ("property AbstractClassPropertySet",
-                [("file1", ((44, 18), (44, 42)), ["defn"], ["member"; "prop"])]);
-               ("property AbstractClassProperty",
-                [("file1", ((43, 18), (43, 39)), ["defn"], ["member"; "prop"])]);
-               ("property AbstractClassEvent",
-                [("file1", ((47, 18), (47, 36)), ["defn"], ["member"; "prop"])]);
-               ("CBaseFooImpl", [("file1", ((49, 5), (49, 17)), ["defn"], ["class"])]);
-               ("member .ctor",
-                [("file1", ((49, 5), (49, 17)), ["defn"], ["member"; "ctor"])]);
-               ("property BaseClassPropertySet",
-                [("file1", ((53, 18), (53, 38)), ["defn"], ["member"; "prop"])]);
-               ("property BaseClassProperty",
-                [("file1", ((52, 18), (52, 35)), ["defn"], ["member"; "prop"])]);
-               ("property BaseClassEvent",
-                [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "prop"])])]
-
+        [("M", [("file1", ((1, 7), (1, 8)), ["defn"], ["module"])]);
+         ("val IFooImplObjectExpression",
+          [("file1", ((58, 4), (58, 28)), ["defn"], ["val"])]);
+         ("val CFooImplObjectExpression",
+          [("file1", ((67, 4), (67, 28)), ["defn"], ["val"])]);
+         ("val getP", [("file1", ((76, 4), (76, 8)), ["defn"], ["val"])]);
+         ("val setP", [("file1", ((77, 4), (77, 8)), ["defn"], ["val"])]);
+         ("val getE", [("file1", ((78, 4), (78, 8)), ["defn"], ["val"])]);
+         ("val getM", [("file1", ((79, 4), (79, 8)), ["defn"], ["val"])]);
+         ("IFoo",
+          [("file1", ((3, 5), (3, 9)), ["defn"], ["interface"]);
+           ("file1", ((33, 14), (33, 18)), ["type"], ["interface"]);
+           ("file1", ((60, 10), (60, 14)), ["type"], ["interface"]);
+           ("file1", ((76, 15), (76, 19)), ["type"], ["interface"]);
+           ("file1", ((77, 15), (77, 19)), ["type"], ["interface"]);
+           ("file1", ((78, 15), (78, 19)), ["type"], ["interface"]);
+           ("file1", ((79, 15), (79, 19)), ["type"], ["interface"])]);
+         ("member InterfaceMethod",
+          [("file1", ((6, 13), (6, 28)), ["defn"], ["slot"; "member"]);
+           ("file1", ((63, 20), (63, 35)), ["override"], ["slot"; "member"]);
+           ("file1", ((79, 23), (79, 42)), [], ["slot"; "member"]);
+           ("file1", ((36, 20), (36, 35)), ["override"], ["slot"; "member"])]);
+         ("member add_InterfaceEvent",
+          [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "add"]);
+           ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "add"]);
+           ("file1", ((78, 23), (78, 41)), [], ["slot"; "member"; "add"]);
+           ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "add"])]);
+         ("member get_InterfaceEvent",
+          [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member get_InterfaceProperty",
+          [("file1", ((4, 13), (4, 30)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((61, 20), (61, 37)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((76, 23), (76, 44)), [], ["slot"; "member"; "getter"]);
+           ("file1", ((34, 20), (34, 37)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member remove_InterfaceEvent",
+          [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "remove"]);
+           ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "remove"]);
+           ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "remove"])]);
+         ("member set_InterfacePropertySet",
+          [("file1", ((5, 13), (5, 33)), ["defn"], ["slot"; "member"; "setter"]);
+           ("file1", ((62, 20), (62, 40)), ["override"], ["slot"; "member"; "setter"]);
+           ("file1", ((77, 25), (77, 49)), [], ["slot"; "member"; "setter"]);
+           ("file1", ((35, 20), (35, 40)), ["override"], ["slot"; "member"; "setter"])]);
+         ("property InterfacePropertySet",
+          [("file1", ((5, 13), (5, 33)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((62, 20), (62, 40)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((77, 25), (77, 49)), [], ["slot"; "member"; "prop"]);
+           ("file1", ((35, 20), (35, 40)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property InterfaceProperty",
+          [("file1", ((4, 13), (4, 30)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((61, 20), (61, 37)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((76, 23), (76, 44)), [], ["slot"; "member"; "prop"]);
+           ("file1", ((34, 20), (34, 37)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property InterfaceEvent",
+          [("file1", ((8, 13), (8, 27)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((65, 20), (65, 34)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((38, 20), (38, 34)), ["override"], ["slot"; "member"; "prop"])]);
+         ("CFoo",
+          [("file1", ((11, 5), (11, 9)), ["defn"], ["class"]);
+           ("file1", ((41, 12), (41, 16)), ["type"], ["class"]);
+           ("file1", ((41, 12), (41, 16)), [], ["class"]);
+           ("file1", ((69, 10), (69, 14)), ["type"], ["class"]);
+           ("file1", ((69, 10), (69, 14)), [], ["class"])]);
+         ("member .ctor",
+          [("file1", ((11, 5), (11, 9)), ["defn"], ["member"; "ctor"]);
+           ("file1", ((41, 12), (41, 16)), ["type"], ["member"; "ctor"]);
+           ("file1", ((41, 12), (41, 16)), [], ["member"; "ctor"]);
+           ("file1", ((69, 10), (69, 14)), ["type"], ["member"; "ctor"]);
+           ("file1", ((69, 10), (69, 14)), [], ["member"; "ctor"])]);
+         ("member AbstractClassMethod",
+          [("file1", ((14, 13), (14, 32)), ["defn"], ["slot"; "member"]);
+           ("file1", ((72, 22), (72, 41)), ["override"], ["slot"; "member"]);
+           ("file1", ((45, 18), (45, 37)), ["override"], ["slot"; "member"])]);
+         ("member add_AbstractClassEvent",
+          [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "add"]);
+           ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "add"]);
+           ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "add"])]);
+         ("member get_AbstractClassEvent",
+          [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member get_AbstractClassProperty",
+          [("file1", ((12, 13), (12, 34)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((70, 22), (70, 43)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((43, 18), (43, 39)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member remove_AbstractClassEvent",
+          [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "remove"]);
+           ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "remove"]);
+           ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "remove"])]);
+         ("member set_AbstractClassPropertySet",
+          [("file1", ((13, 13), (13, 37)), ["defn"], ["slot"; "member"; "setter"]);
+           ("file1", ((71, 22), (71, 46)), ["override"], ["slot"; "member"; "setter"]);
+           ("file1", ((44, 18), (44, 42)), ["override"], ["slot"; "member"; "setter"])]);
+         ("property AbstractClassPropertySet",
+          [("file1", ((13, 13), (13, 37)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((71, 22), (71, 46)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((44, 18), (44, 42)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property AbstractClassProperty",
+          [("file1", ((12, 13), (12, 34)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((70, 22), (70, 43)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((43, 18), (43, 39)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property AbstractClassEvent",
+          [("file1", ((16, 13), (16, 31)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((74, 22), (74, 40)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((47, 18), (47, 36)), ["override"], ["slot"; "member"; "prop"])]);
+         ("CBaseFoo",
+          [("file1", ((18, 5), (18, 13)), ["defn"], ["class"]);
+           ("file1", ((50, 12), (50, 20)), ["type"], ["class"]);
+           ("file1", ((50, 12), (50, 20)), [], ["class"])]);
+         ("member .ctor",
+          [("file1", ((18, 5), (18, 13)), ["defn"], ["member"; "ctor"]);
+           ("file1", ((50, 12), (50, 20)), ["type"], ["member"; "ctor"]);
+           ("file1", ((50, 12), (50, 20)), [], ["member"; "ctor"])]);
+         ("member BaseClassMethod",
+          [("file1", ((22, 13), (22, 28)), ["defn"], ["slot"; "member"]);
+           ("file1", ((27, 15), (27, 30)), ["override"], ["slot"; "member"]);
+           ("file1", ((54, 18), (54, 33)), ["override"], ["slot"; "member"])]);
+         ("member BaseClassMethod",
+          [("file1", ((27, 15), (27, 30)), ["defn"], ["member"; "overridemem"])]);
+         ("member add_BaseClassEvent",
+          [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "add"]);
+           ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "add"]);
+           ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "add"])]);
+         ("member add_BaseClassEvent",
+          [("file1", ((29, 15), (29, 29)), ["defn"], ["member"; "add"; "overridemem"])]);
+         ("member get_BaseClassEvent",
+          [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member get_BaseClassEvent",
+          [("file1", ((29, 15), (29, 29)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member get_BaseClassProperty",
+          [("file1", ((20, 13), (20, 30)), ["defn"], ["slot"; "member"; "getter"]);
+           ("file1", ((25, 15), (25, 32)), ["override"], ["slot"; "member"; "getter"]);
+           ("file1", ((52, 18), (52, 35)), ["override"], ["slot"; "member"; "getter"])]);
+         ("member get_BaseClassProperty",
+          [("file1", ((25, 15), (25, 32)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member remove_BaseClassEvent",
+          [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "remove"]);
+           ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "remove"]);
+           ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "remove"])]);
+         ("member remove_BaseClassEvent",
+          [("file1", ((29, 15), (29, 29)), ["defn"], ["member"; "remove"; "overridemem"])]);
+         ("member set_BaseClassPropertySet",
+          [("file1", ((21, 13), (21, 33)), ["defn"], ["slot"; "member"; "setter"]);
+           ("file1", ((26, 15), (26, 35)), ["override"], ["slot"; "member"; "setter"]);
+           ("file1", ((53, 18), (53, 38)), ["override"], ["slot"; "member"; "setter"])]);
+         ("member set_BaseClassPropertySet",
+          [("file1", ((26, 15), (26, 35)), ["defn"], ["member"; "setter"; "overridemem"])]);
+         ("property BaseClassPropertySet",
+          [("file1", ((26, 15), (26, 35)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property BaseClassPropertySet",
+          [("file1", ((21, 13), (21, 33)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((26, 15), (26, 35)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((53, 18), (53, 38)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property BaseClassProperty",
+          [("file1", ((25, 15), (25, 32)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property BaseClassProperty",
+          [("file1", ((20, 13), (20, 30)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((25, 15), (25, 32)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((52, 18), (52, 35)), ["override"], ["slot"; "member"; "prop"])]);
+         ("property BaseClassEvent",
+          [("file1", ((29, 15), (29, 29)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property BaseClassEvent",
+          [("file1", ((24, 13), (24, 27)), ["defn"], ["slot"; "member"; "prop"]);
+           ("file1", ((29, 15), (29, 29)), ["override"], ["slot"; "member"; "prop"]);
+           ("file1", ((56, 18), (56, 32)), ["override"], ["slot"; "member"; "prop"])]);
+         ("IFooImpl", [("file1", ((31, 5), (31, 13)), ["defn"], ["class"])]);
+         ("member .ctor", [("file1", ((31, 5), (31, 13)), ["defn"], ["member"; "ctor"])]);
+         ("member InterfaceMethod",
+          [("file1", ((36, 20), (36, 35)), ["defn"], ["member"; "overridemem"])]);
+         ("member add_InterfaceEvent",
+          [("file1", ((38, 20), (38, 34)), ["defn"], ["member"; "overridemem"])]);
+         ("member get_InterfaceEvent",
+          [("file1", ((38, 20), (38, 34)), ["defn"], ["member"; "overridemem"])]);
+         ("member get_InterfaceProperty",
+          [("file1", ((34, 20), (34, 37)), ["defn"], ["member"; "overridemem"])]);
+         ("member remove_InterfaceEvent",
+          [("file1", ((38, 20), (38, 34)), ["defn"], ["member"; "overridemem"])]);
+         ("member set_InterfacePropertySet",
+          [("file1", ((35, 20), (35, 40)), ["defn"], ["member"; "overridemem"])]);
+         ("CFooImpl", [("file1", ((40, 5), (40, 13)), ["defn"], ["class"])]);
+         ("member .ctor", [("file1", ((40, 5), (40, 13)), ["defn"], ["member"; "ctor"])]);
+         ("member AbstractClassMethod",
+          [("file1", ((45, 18), (45, 37)), ["defn"], ["member"; "overridemem"])]);
+         ("member add_AbstractClassEvent",
+          [("file1", ((47, 18), (47, 36)), ["defn"], ["member"; "add"; "overridemem"])]);
+         ("member get_AbstractClassEvent",
+          [("file1", ((47, 18), (47, 36)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member get_AbstractClassProperty",
+          [("file1", ((43, 18), (43, 39)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member remove_AbstractClassEvent",
+          [("file1", ((47, 18), (47, 36)), ["defn"], ["member"; "remove"; "overridemem"])]);
+         ("member set_AbstractClassPropertySet",
+          [("file1", ((44, 18), (44, 42)), ["defn"], ["member"; "setter"; "overridemem"])]);
+         ("property AbstractClassPropertySet",
+          [("file1", ((44, 18), (44, 42)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property AbstractClassProperty",
+          [("file1", ((43, 18), (43, 39)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property AbstractClassEvent",
+          [("file1", ((47, 18), (47, 36)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("CBaseFooImpl", [("file1", ((49, 5), (49, 17)), ["defn"], ["class"])]);
+         ("member .ctor", [("file1", ((49, 5), (49, 17)), ["defn"], ["member"; "ctor"])]);
+         ("member BaseClassMethod",
+          [("file1", ((54, 18), (54, 33)), ["defn"], ["member"; "overridemem"])]);
+         ("member add_BaseClassEvent",
+          [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "add"; "overridemem"])]);
+         ("member get_BaseClassEvent",
+          [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member get_BaseClassProperty",
+          [("file1", ((52, 18), (52, 35)), ["defn"], ["member"; "getter"; "overridemem"])]);
+         ("member remove_BaseClassEvent",
+          [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "remove"; "overridemem"])]);
+         ("member set_BaseClassPropertySet",
+          [("file1", ((53, 18), (53, 38)), ["defn"], ["member"; "setter"; "overridemem"])]);
+         ("property BaseClassPropertySet",
+          [("file1", ((53, 18), (53, 38)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property BaseClassProperty",
+          [("file1", ((52, 18), (52, 35)), ["defn"], ["member"; "prop"; "overridemem"])]);
+         ("property BaseClassEvent",
+          [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "prop"; "overridemem"])])]
+    printfn "Actual: %A" allUsesOfAllSymbols
     set allUsesOfAllSymbols - set expected |> shouldEqual Set.empty
     set expected - set allUsesOfAllSymbols |> shouldEqual Set.empty
     (set expected = set allUsesOfAllSymbols) |> shouldEqual true
@@ -1439,7 +1505,7 @@ module Project5 =
     let fileSource1 = """
 module ActivePatterns 
 
-
+///Total active pattern for even/odd integers
 let (|Even|Odd|) input = if input % 2 = 0 then Even else Odd
 
 
@@ -1448,7 +1514,7 @@ let TestNumber input =
    | Even -> printfn "%d is even" input
    | Odd -> printfn "%d is odd" input
 
-
+///Partial active pattern for floats
 let (|Float|_|) (str: string) =
    let mutable floatvalue = 0.0
    if System.Double.TryParse(str, &floatvalue) then Some(floatvalue)
@@ -1548,23 +1614,37 @@ let ``Test project 5 all symbols`` () =
             ("ActivePatterns", "ActivePatterns", "file1", ((1, 7), (1, 21)), ["defn"])|]
 
 [<Test>]
-let ``Test complete active patterns's exact ranges from uses of symbols`` () =
+let ``Test complete active patterns' exact ranges from uses of symbols`` () =
 
     let wholeProjectResults = checker.ParseAndCheckProject(Project5.options) |> Async.RunSynchronously
     let backgroundParseResults1, backgroundTypedParse1 = 
         checker.GetBackgroundCheckResultsForFileInProject(Project5.fileName1, Project5.options) 
         |> Async.RunSynchronously
 
-
     let oddSymbolUse = backgroundTypedParse1.GetSymbolUseAtLocation(11,8,"",["Odd"]) |> Async.RunSynchronously
     oddSymbolUse.IsSome |> shouldEqual true  
     let oddSymbol = oddSymbolUse.Value.Symbol
     oddSymbol.ToString() |> shouldEqual "symbol Odd"
 
+    let oddActivePatternCase = oddSymbol :?> FSharpActivePatternCase
+    oddActivePatternCase.XmlDoc |> Seq.toList |> shouldEqual ["Total active pattern for even/odd integers"]
+    oddActivePatternCase.XmlDocSig |> shouldEqual ""
+    let oddGroup = oddActivePatternCase.Group
+    oddGroup.IsTotal |> shouldEqual true
+    oddGroup.Names |> Seq.toList |> shouldEqual ["Even"; "Odd"]
+    oddGroup.OverallType.Format(oddSymbolUse.Value.DisplayContext) |> shouldEqual "int -> Choice<unit,unit>"
+
     let evenSymbolUse = backgroundTypedParse1.GetSymbolUseAtLocation(10,9,"",["Even"]) |> Async.RunSynchronously
     evenSymbolUse.IsSome |> shouldEqual true  
     let evenSymbol = evenSymbolUse.Value.Symbol
     evenSymbol.ToString() |> shouldEqual "symbol Even"
+    let evenActivePatternCase = evenSymbol :?> FSharpActivePatternCase
+    evenActivePatternCase.XmlDoc |> Seq.toList |> shouldEqual ["Total active pattern for even/odd integers"]
+    evenActivePatternCase.XmlDocSig |> shouldEqual ""
+    let evenGroup = evenActivePatternCase.Group
+    evenGroup.IsTotal |> shouldEqual true
+    evenGroup.Names |> Seq.toList |> shouldEqual ["Even"; "Odd"]
+    evenGroup.OverallType.Format(evenSymbolUse.Value.DisplayContext) |> shouldEqual "int -> Choice<unit,unit>"
 
     let usesOfEvenSymbol = 
         wholeProjectResults.GetUsesOfSymbol(evenSymbol) 
@@ -1588,19 +1668,25 @@ let ``Test complete active patterns's exact ranges from uses of symbols`` () =
 
 
 [<Test>]
-let ``Test partial active patterns's exact ranges from uses of symbols`` () =
+let ``Test partial active patterns' exact ranges from uses of symbols`` () =
 
     let wholeProjectResults = checker.ParseAndCheckProject(Project5.options) |> Async.RunSynchronously
     let backgroundParseResults1, backgroundTypedParse1 = 
         checker.GetBackgroundCheckResultsForFileInProject(Project5.fileName1, Project5.options) 
         |> Async.RunSynchronously    
 
-
     let floatSymbolUse = backgroundTypedParse1.GetSymbolUseAtLocation(22,10,"",["Float"]) |> Async.RunSynchronously
     floatSymbolUse.IsSome |> shouldEqual true  
     let floatSymbol = floatSymbolUse.Value.Symbol 
     floatSymbol.ToString() |> shouldEqual "symbol Float"
 
+    let floatActivePatternCase = floatSymbol :?> FSharpActivePatternCase
+    floatActivePatternCase.XmlDoc |> Seq.toList |> shouldEqual ["Partial active pattern for floats"]
+    floatActivePatternCase.XmlDocSig |> shouldEqual ""
+    let floatGroup = floatActivePatternCase.Group
+    floatGroup.IsTotal |> shouldEqual false
+    floatGroup.Names |> Seq.toList |> shouldEqual ["Float"]
+    floatGroup.OverallType.Format(floatSymbolUse.Value.DisplayContext) |> shouldEqual "string -> float option"
 
     let usesOfFloatSymbol = 
         wholeProjectResults.GetUsesOfSymbol(floatSymbol) 
@@ -1617,7 +1703,6 @@ let ``Test partial active patterns's exact ranges from uses of symbols`` () =
         |> Async.RunSynchronously
 
     floatSymUseOpt.IsSome |> shouldEqual true
-
 
 //-----------------------------------------------------------------------------------------
 
@@ -2694,25 +2779,25 @@ let ``Test Project19 all symbols`` () =
 
     allUsesOfAllSymbols |> shouldEqual
           [|("field EnumCase1", "EnumCase1", "file1", ((4, 14), (4, 23)), ["defn"],
-             ["field"; "static"]);
+             ["field"; "static"; "1"]);
             ("field EnumCase2", "EnumCase2", "file1", ((4, 30), (4, 39)), ["defn"],
-             ["field"; "static"]);
+             ["field"; "static"; "2"]);
             ("Enum", "Enum", "file1", ((4, 5), (4, 9)), ["defn"],
              ["enum"; "valuetype"]);
             ("Enum", "Enum", "file1", ((6, 8), (6, 12)), [], ["enum"; "valuetype"]);
             ("field EnumCase1", "EnumCase1", "file1", ((6, 8), (6, 22)), [],
-             ["field"; "static"]);
+             ["field"; "static"; "1"]);
             ("Enum", "Enum", "file1", ((7, 8), (7, 12)), [], ["enum"; "valuetype"]);
             ("field EnumCase2", "EnumCase2", "file1", ((7, 8), (7, 22)), [],
-             ["field"; "static"]);
+             ["field"; "static"; "2"]);
             ("val x", "x", "file1", ((8, 6), (8, 7)), ["defn"], []);
             ("val x", "x", "file1", ((8, 16), (8, 17)), [], []);
             ("Enum", "Enum", "file1", ((8, 23), (8, 27)), [], ["enum"; "valuetype"]);
             ("field EnumCase1", "EnumCase1", "file1", ((8, 23), (8, 37)), ["pattern"],
-             ["field"; "static"]);
+             ["field"; "static"; "1"]);
             ("Enum", "Enum", "file1", ((8, 45), (8, 49)), [], ["enum"; "valuetype"]);
             ("field EnumCase2", "EnumCase2", "file1", ((8, 45), (8, 59)), ["pattern"],
-             ["field"; "static"]);
+             ["field"; "static"; "2"]);
             ("val f", "f", "file1", ((8, 4), (8, 5)), ["defn"], ["val"]);
             ("DayOfWeek", "DayOfWeek", "file1", ((10, 15), (10, 24)), [],
              ["enum"; "valuetype"]);
@@ -2987,6 +3072,19 @@ module Impl
 type Class() =
     static member StaticProperty = 1
     member x.Property = 1
+
+module Getter =
+    type System.Int32 with
+        static member Zero = 0
+        member x.Value = 0 
+
+    let _ = 0 .Value
+
+module Setter =
+    type System.Int32 with
+        member x.Value with set (_: int) = ()
+
+    0 .Value <- 0
 """
     File.WriteAllText(fileName1, fileSource1)
     let cleanFileName a = if a = fileName1 then "file1" else "??"
@@ -2998,7 +3096,7 @@ type Class() =
 [<Test>]
 let ``Test Project23 whole project errors`` () = 
 
-    let wholeProjectResults = checker.ParseAndCheckProject(Project22.options) |> Async.RunSynchronously
+    let wholeProjectResults = checker.ParseAndCheckProject(Project23.options) |> Async.RunSynchronously
     wholeProjectResults.Errors.Length |> shouldEqual 0
 
 [<Test>]
@@ -3012,11 +3110,11 @@ let ``Test Project23 property`` () =
 
     [ for x in classTypeDefn.MembersFunctionsAndValues -> x.LogicalName, attribsOfSymbol x ]
       |> shouldEqual 
-           [(".ctor", ["member"; "ctor"])   
-            ("get_Property", ["member"; "getter"])
-            ("get_StaticProperty", ["member"; "getter"])
-            ("StaticProperty", ["member"; "prop"])
-            ("Property", ["member"; "prop"])]
+          [(".ctor", ["member"; "ctor"]); 
+           ("get_Property", ["member"; "getter"]);
+           ("get_StaticProperty", ["member"; "getter"]);
+           ("StaticProperty", ["member"; "prop"]); 
+           ("Property", ["member"; "prop"])]
 
     allSymbolsUses 
     |> Array.map (fun x -> x.Symbol)
@@ -3024,13 +3122,45 @@ let ``Test Project23 property`` () =
         | :? FSharpMemberFunctionOrValue as f -> Some (f.LogicalName, attribsOfSymbol f)
         | _ -> None)
     |> Array.toList
-    |> shouldEqual 
-        [(".ctor", ["member"; "ctor"])
+    |> shouldEqual         
+        [(".ctor", ["member"; "ctor"]); 
          ("get_StaticProperty", ["member"; "getter"]);
-         ("get_Property", ["member"; "getter"])
-         ("x", [])
-         ]
+         ("get_Property", ["member"; "getter"]); 
+         ("x", []);
+         ("get_Zero", ["member"; "extmem"; "getter"]);
+         ("get_Value", ["member"; "extmem"; "getter"]); 
+         ("x", []);
+         ("Value", ["member"; "prop"; "extmem"]);
+         ("set_Value", ["member"; "extmem"; "setter"]); 
+         ("x", []);
+         ("_arg1", ["compgen"]); 
+         ("Value", ["member"; "prop"; "extmem"])]
 
+[<Test>]
+let ``Test Project23 extension properties' getters/setters should refer to the correct declaring entities`` () =
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project23.options) |> Async.RunSynchronously
+    let allSymbolsUses = wholeProjectResults.GetAllUsesOfAllSymbols() |> Async.RunSynchronously
+
+    let extensionMembers = allSymbolsUses |> Array.rev |> Array.filter (fun su -> su.Symbol.DisplayName = "Value")
+    extensionMembers
+    |> Array.collect (fun memb -> wholeProjectResults.GetUsesOfSymbol(memb.Symbol) |> Async.RunSynchronously)
+    |> Array.collect (fun x -> 
+        [|
+        match x.Symbol with
+        | :? FSharpMemberFunctionOrValue as f -> 
+            if f.HasGetterMethod then
+                yield (f.EnclosingEntity.FullName, f.GetterMethod.EnclosingEntity.FullName, attribsOfSymbol f)
+            if f.HasSetterMethod then
+                yield (f.EnclosingEntity.FullName, f.SetterMethod.EnclosingEntity.FullName, attribsOfSymbol f)
+        | _ -> () 
+        |])
+    |> Array.toList
+    |> shouldEqual 
+        [ ("System.Int32", "Impl.Setter", ["member"; "prop"; "extmem"]);
+          ("System.Int32", "Impl.Setter", ["member"; "prop"; "extmem"]);
+          ("System.Int32", "Impl.Getter", ["member"; "prop"; "extmem"])
+          ("System.Int32", "Impl.Getter", ["member"; "prop"; "extmem"]) ]
 
 // Misc - property symbols
 module Project24 = 
@@ -3458,3 +3588,233 @@ let ``Test symbol uses of fully-qualified records`` () =
 
     usesOfGetSampleSymbol |> shouldEqual [|("file1", ((7, 5), (7, 11))); ("file1", ((8, 10), (8, 16)))|]
 
+module Project26 = 
+    open System.IO
+
+    let fileName1 = Path.ChangeExtension(Path.GetTempFileName(), ".fs")
+    let base2 = Path.GetTempFileName()
+    let dllName = Path.ChangeExtension(base2, ".dll")
+    let projFileName = Path.ChangeExtension(base2, ".fsproj")
+    let fileSource1 = """
+module FSharpParameter
+open System
+open System.Runtime.InteropServices
+
+type Class() =
+    member x.M1(arg1, ?arg2) = ()
+    member x.M2([<ParamArray>] arg1, [<OptionalArgument>] arg2) = ()
+    member x.M3([<Out>] arg: byref<int>) = ()
+    """
+    File.WriteAllText(fileName1, fileSource1)
+
+    let cleanFileName a = if a = fileName1 then "file1" else "??"
+
+    let fileNames = [fileName1]
+    let args = mkProjectCommandLineArgs (dllName, fileNames)
+    let options =  checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
+
+
+[<Test>]
+let ``Test Project26 whole project errors`` () = 
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project26.options) |> Async.RunSynchronously
+    wholeProjectResults.Errors.Length |> shouldEqual 0
+
+
+[<Test>]
+let ``Test Project26 parameter symbols`` () =
+    let wholeProjectResults = checker.ParseAndCheckProject(Project26.options) |> Async.RunSynchronously
+
+    let allUsesOfAllSymbols = 
+        wholeProjectResults.GetAllUsesOfAllSymbols()
+        |> Async.RunSynchronously
+        |> Array.map (fun su -> su.Symbol.ToString(), su.Symbol.DisplayName, Project13.cleanFileName su.FileName, tups su.RangeAlternate, attribsOfSymbolUse su, attribsOfSymbol su.Symbol)
+
+
+    let objSymbol = wholeProjectResults.GetAllUsesOfAllSymbols() |> Async.RunSynchronously |> Array.find (fun su -> su.Symbol.DisplayName = "Class")
+    let objEntity = objSymbol.Symbol :?> FSharpEntity
+    
+    // check we can get the CurriedParameterGroups
+    let objMethodsCurriedParameterGroups = 
+        [ for x in objEntity.MembersFunctionsAndValues do 
+             for pg in x.CurriedParameterGroups do 
+                 for p in pg do
+                     let attributeNames = 
+                        seq {
+                            if p.IsParamArrayArg then yield "params"
+                            if p.IsOutArg then yield "out"
+                            if p.IsOptionalArg then yield "optional"
+                        }
+                        |> String.concat ","
+                     yield x.CompiledName, p.Name,  p.Type.ToString(), attributeNames ]
+
+    objMethodsCurriedParameterGroups |> shouldEqual 
+          [("M1", Some "arg1", "type 'c", "");
+           ("M1", Some "arg2", "type 'd Microsoft.FSharp.Core.option", "optional");
+           ("M2", Some "arg1", "type 'a", "params");
+           ("M2", Some "arg2", "type 'b", "optional");
+           ("M3", Some "arg", "type Microsoft.FSharp.Core.byref<Microsoft.FSharp.Core.int>", "out")]
+
+    // check we can get the ReturnParameter
+    let objMethodsReturnParameter = 
+        [ for x in objEntity.MembersFunctionsAndValues do 
+             let p = x.ReturnParameter 
+             let attributeNames = 
+                 seq {
+                    if p.IsParamArrayArg then yield "params"
+                    if p.IsOutArg then yield "out"
+                    if p.IsOptionalArg then yield "optional"
+                 }
+                 |> String.concat ","
+             yield x.DisplayName, p.Name,  p.Type.ToString(), attributeNames ]
+    set objMethodsReturnParameter |> shouldEqual
+       (set
+           [("( .ctor )", None, "type FSharpParameter.Class", "");
+            ("M1", None, "type Microsoft.FSharp.Core.unit", "");
+            ("M2", None, "type Microsoft.FSharp.Core.unit", "");
+            ("M3", None, "type Microsoft.FSharp.Core.unit", "")])
+
+module Project27 = 
+    open System.IO
+
+    let fileName1 = Path.ChangeExtension(Path.GetTempFileName(), ".fs")
+    let base2 = Path.GetTempFileName()
+    let dllName = Path.ChangeExtension(base2, ".dll")
+    let projFileName = Path.ChangeExtension(base2, ".fsproj")
+    let fileSource1 = """
+module M
+
+type CFoo() =
+    abstract AbstractMethod: int -> string
+    default __.AbstractMethod _ = "dflt"
+    
+type CFooImpl() =
+    inherit CFoo()
+    override __.AbstractMethod _ = "v"
+"""
+    File.WriteAllText(fileName1, fileSource1)
+
+    let fileNames = [fileName1]
+    let args = mkProjectCommandLineArgs (dllName, fileNames)
+    let options =  checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
+
+[<Test>]
+let ``Test project27 whole project errors`` () = 
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project27.options) |> Async.RunSynchronously
+    wholeProjectResults .Errors.Length |> shouldEqual 0
+
+[<Test>]
+let ``Test project27 all symbols in signature`` () = 
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project27.options) |> Async.RunSynchronously
+    let allSymbols = allSymbolsInEntities true wholeProjectResults.AssemblySignature.Entities
+    [ for x in allSymbols -> x.ToString(), attribsOfSymbol x ] 
+      |> shouldEqual 
+            [("M", ["module"]); 
+             ("CFoo", ["class"]); 
+             ("member .ctor", ["member"; "ctor"]);
+             ("member AbstractMethod", ["slot"; "member"]);
+             ("member AbstractMethod", ["member"; "overridemem"]); 
+             ("CFooImpl", ["class"]);
+             ("member .ctor", ["member"; "ctor"]);
+             ("member AbstractMethod", ["member"; "overridemem"])]
+
+module Project28 = 
+    open System.IO
+
+    let fileName1 = Path.ChangeExtension(Path.GetTempFileName(), ".fs")
+    let base2 = Path.GetTempFileName()
+    let dllName = Path.ChangeExtension(base2, ".dll")
+    let projFileName = Path.ChangeExtension(base2, ".fsproj")
+    let fileSource1 = """
+module M
+open System
+open System.Collections.Generic
+let (|Even|Odd|) input = if input % 2 = 0 then Even else Odd
+let TestNumber input =
+   match input with
+   | Even -> printfn "%d is even" input
+   | Odd -> printfn "%d is odd" input
+type DU = A of string | B of int
+type XmlDocSigTest() =
+    let event1 = new Event<_>()
+    let event2 = new Event<_>()
+    let aString = "fourtytwo"
+    let anInt = 42
+    member x.AProperty = Dictionary<int, string>()
+    member x.AnotherProperty = aString
+    member x.AMethod () = x.AProperty
+    member x.AnotherMethod () = anInt
+    [<CLIEvent>]
+    member this.AnEvent = event1.Publish
+    member this.AnotherEvent = event2.Publish
+    member this.TestEvent1(arg) = event1.Trigger(this, arg)
+    member this.TestEvent2(arg) = event2.Trigger(this, arg)
+
+type Use() =
+    let a = XmlDocSigTest ()
+    do a.AnEvent.Add (fun _ -> () )
+    member x.Test number =
+        TestNumber 42
+"""
+    File.WriteAllText(fileName1, fileSource1)
+
+    let fileNames = [fileName1]
+    let args = mkProjectCommandLineArgs (dllName, fileNames)
+    let options =  checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
+
+[<Test>]
+let ``Test project28 all symbols in signature`` () = 
+    let wholeProjectResults = checker.ParseAndCheckProject(Project28.options) |> Async.RunSynchronously
+    let allSymbols = allSymbolsInEntities true wholeProjectResults.AssemblySignature.Entities
+    let xmlDocSigs =
+        allSymbols
+        |> Seq.map (fun s ->
+                        let typeName = s.GetType().Name
+                        match s with
+                        | :? FSharpEntity as fse -> typeName, fse.DisplayName, fse.XmlDocSig
+                        | :? FSharpField as fsf -> typeName, fsf.DisplayName, fsf.XmlDocSig
+                        | :? FSharpMemberFunctionOrValue as fsm -> typeName, fsm.DisplayName, fsm.XmlDocSig
+                        | :? FSharpUnionCase as fsu -> typeName, fsu.DisplayName, fsu.XmlDocSig
+                        | :? FSharpActivePatternCase as ap -> typeName, ap.DisplayName, ap.XmlDocSig
+                        | :? FSharpGenericParameter as fsg -> typeName, fsg.DisplayName, ""
+                        | :? FSharpParameter as fsp -> typeName, fsp.DisplayName, ""
+                        | :? FSharpStaticParameter as fss -> typeName, fss.DisplayName, ""
+                        | _ -> typeName, s.DisplayName, "unknown")
+        |> Seq.toArray
+
+    xmlDocSigs
+      |> shouldEqual 
+            [|("FSharpEntity", "M", "T:M");
+              ("FSharpMemberFunctionOrValue", "( |Even|Odd| )", "M:|Even|Odd|(System.Int32)");
+              ("FSharpMemberFunctionOrValue", "TestNumber", "M:TestNumber(System.Int32)");
+              ("FSharpEntity", "DU", "T:M.DU"); 
+              ("FSharpUnionCase", "A", "T:M.DU.A");
+              ("FSharpField", "A", "T:M.DU.A"); 
+              ("FSharpUnionCase", "B", "T:M.DU.B");
+              ("FSharpField", "B", "T:M.DU.B");
+              ("FSharpEntity", "XmlDocSigTest", "T:M.XmlDocSigTest");
+              ("FSharpMemberFunctionOrValue", "( .ctor )", "M:M.XmlDocSigTest.#ctor");
+              ("FSharpMemberFunctionOrValue", "AMethod", "M:M.XmlDocSigTest.AMethod");
+              ("FSharpMemberFunctionOrValue", "AnotherMethod", "M:M.XmlDocSigTest.AnotherMethod");
+              ("FSharpMemberFunctionOrValue", "TestEvent1", "M:M.XmlDocSigTest.TestEvent1(System.Object)");
+              ("FSharpMemberFunctionOrValue", "TestEvent2", "M:M.XmlDocSigTest.TestEvent2(System.Object)");
+              ("FSharpMemberFunctionOrValue", "add_AnEvent", "M:M.XmlDocSigTest.add_AnEvent(Microsoft.FSharp.Control.FSharpHandler{System.Tuple{M.XmlDocSigTest,System.Object}})");
+              ("FSharpMemberFunctionOrValue", "AProperty", "P:M.XmlDocSigTest.AProperty");
+              ("FSharpMemberFunctionOrValue", "AnEvent", "P:M.XmlDocSigTest.AnEvent");
+              ("FSharpMemberFunctionOrValue", "AnotherEvent", "P:M.XmlDocSigTest.AnotherEvent");
+              ("FSharpMemberFunctionOrValue", "AnotherProperty", "P:M.XmlDocSigTest.AnotherProperty");
+              ("FSharpMemberFunctionOrValue", "remove_AnEvent", "M:M.XmlDocSigTest.remove_AnEvent(Microsoft.FSharp.Control.FSharpHandler{System.Tuple{M.XmlDocSigTest,System.Object}})");
+              ("FSharpMemberFunctionOrValue", "AnotherProperty", "P:M.XmlDocSigTest.AnotherProperty");
+              ("FSharpMemberFunctionOrValue", "AnotherEvent", "P:M.XmlDocSigTest.AnotherEvent");
+              ("FSharpMemberFunctionOrValue", "AnEvent", "P:M.XmlDocSigTest.AnEvent");
+              ("FSharpMemberFunctionOrValue", "AProperty", "P:M.XmlDocSigTest.AProperty");
+              ("FSharpField", "event1", "F:M.XmlDocSigTest.event1");
+              ("FSharpField", "event2", "F:M.XmlDocSigTest.event2");
+              ("FSharpField", "aString", "F:M.XmlDocSigTest.aString");
+              ("FSharpField", "anInt", "F:M.XmlDocSigTest.anInt");
+              ("FSharpEntity", "Use", "T:M.Use");
+              ("FSharpMemberFunctionOrValue", "( .ctor )", "M:M.Use.#ctor");
+              ("FSharpMemberFunctionOrValue", "Test", "M:M.Use.Test``1(``0)");
+              ("FSharpGenericParameter", "?", "")|]

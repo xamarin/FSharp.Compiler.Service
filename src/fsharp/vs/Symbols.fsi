@@ -117,6 +117,9 @@ and [<Class>] FSharpEntity =
     /// Get the full name of the type or module
     member FullName: string 
 
+    /// Get the full name of the type or module if it is available
+    member TryFullName: string option
+
     /// Get the declaration location for the type constructor 
     member DeclarationLocation: range 
 
@@ -303,6 +306,9 @@ and [<Class>] FSharpField =
     /// Indicates if the field is declared 'static'
     member IsMutable: bool
 
+    /// Indicates if the field has a literal value
+    member IsLiteral: bool
+
     /// Indicates if the field is declared volatile 
     member IsVolatile: bool
 
@@ -336,10 +342,9 @@ and [<Class>] FSharpField =
     /// Get the name of the field 
     member Name : string
 
-#if TODO
       /// Get the default initialization info, for static literals 
-    member LiteralValue: obj 
-#endif
+    member LiteralValue: obj option
+
       ///  Indicates if the declared visibility of the field, not taking signatures into account 
     member Accessibility: FSharpAccessibility 
 
@@ -558,11 +563,26 @@ and [<Class>] FSharpMemberFunctionOrValue =
     /// Indicates if this is an extension member?
     member IsExtensionMember : bool
 
+    /// Indicates if this is an 'override' or explicit member (declared via 'default' keyword)?
+    member IsOverrideOrExplicitMember : bool
+
     /// Indicates if this is a member, including extension members?
     member IsMember : bool
 
     /// Indicates if this is a property member
     member IsProperty : bool
+
+    /// Indicates if this is a property then there exists an associated getter method
+    member HasGetterMethod : bool
+
+    /// Get an associated getter method of the property
+    member GetterMethod : FSharpMemberFunctionOrValue
+
+    /// Indicates if this is a property then there exists an associated setter method
+    member HasSetterMethod : bool
+
+    /// Get an associated setter method of the property
+    member SetterMethod : FSharpMemberFunctionOrValue
 
     /// Indicates if this is an event member
     member IsEvent : bool
@@ -662,7 +682,7 @@ and [<Class>] FSharpParameter =
     /// The optional name of the parameter 
     member Name: string option
 
-    /// The declartaion location of the parameter 
+    /// The declaration location of the parameter 
     member DeclarationLocation : range 
 
     /// The declared or inferred type of the parameter 
@@ -671,14 +691,43 @@ and [<Class>] FSharpParameter =
     /// The declared attributes of the parameter 
     member Attributes: IList<FSharpAttribute>
 
+    /// Indicate this is a param array argument
+    member IsParamArrayArg: bool
+
+    /// Indicate this is an out argument
+    member IsOutArg: bool
+
+    /// Indicate this is an optional argument
+    member IsOptionalArg: bool
+
 /// Represents a single case within an active pattern
 and [<Class>] FSharpActivePatternCase =
     inherit FSharpSymbol
     /// The name of the active pattern case 
     member Name: string 
+
     /// The location of declaration of the active pattern case 
     member DeclarationLocation : range 
 
+    /// The group of active pattern cases this belongs to
+    member Group : FSharpActivePatternGroup
+
+    /// Get the in-memory XML documentation for the active pattern case, used when code is checked in-memory
+    member XmlDoc: IList<string>
+
+      /// XML documentation signature for the active pattern case, used for .xml file lookup for compiled code
+    member XmlDocSig: string
+
+/// Represents all cases within an active pattern
+and [<Class>] FSharpActivePatternGroup =
+    /// The names of the active pattern cases
+    member Names: IList<string> 
+
+    /// Indicate this is a total active pattern
+    member IsTotal : bool 
+
+    /// Get the type indicating signature of the active pattern
+    member OverallType : FSharpType
 
 and [<Class>] FSharpType =
     /// Internal use only. Create a ground type.

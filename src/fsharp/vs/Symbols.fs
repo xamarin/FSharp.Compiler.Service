@@ -81,6 +81,13 @@ module Impl =
             cpaths2 |> List.exists (canAccessFromCrossProject taccess1) 
         | _ -> true // otherwise use the normal check
 
+    let getXmlDocSigForEntity g (tcImports:TcImports) (ent:EntityRef)=
+        let amap = tcImports.GetImportMap()
+        let infoReader = InfoReader(g, amap)
+        match ItemDescriptionsImpl.GetXmlDocSigOfEntityRef infoReader ent.Range ent with
+        | Some (_, docsig) -> docsig
+        | _ -> ""
+
 type FSharpDisplayContext(denv: TcGlobals -> DisplayEnv) = 
     member x.Contents(g) = denv(g)
     static member Empty = FSharpDisplayContext(fun g -> DisplayEnv.Empty(g))
@@ -182,7 +189,14 @@ and FSharpEntity(g:TcGlobals, thisCcu, tcImports: TcImports, entity:EntityRef) =
         match entity.CompiledRepresentation with 
         | CompiledTypeRepr.ILAsmNamed(tref,_,_) -> tref.FullName
         | CompiledTypeRepr.ILAsmOpen _ -> fail()
-        
+    
+    member x.TryFullName = 
+        if isUnresolved() then None
+        elif entity.IsTypeAbbrev then None
+        else
+            match entity.CompiledRepresentation with 
+            | CompiledTypeRepr.ILAsmNamed(tref,_,_) -> Some tref.FullName
+            | CompiledTypeRepr.ILAsmOpen _ -> None   
 
     member __.DeclarationLocation = 
         checkIsResolved()
@@ -330,8 +344,8 @@ and FSharpEntity(g:TcGlobals, thisCcu, tcImports: TcImports, entity:EntityRef) =
            elif x.IsFSharp then 
                // For F# code we emit methods members in declaration order
                for v in entity.MembersOfFSharpTyconSorted do 
-                 // Ignore members representing the generated .cctor and implementations of interface slots
-                 if not v.IsOverrideOrExplicitImpl && not v.Deref.IsClassConstructor then 
+                 // Ignore members representing the generated .cctor
+                 if not v.Deref.IsClassConstructor then 
                      let fsMeth = FSMeth (g, entityTy, v, None)
                      let item = 
                          if fsMeth.IsConstructor then  Item.CtorGroup (fsMeth.DisplayName, [fsMeth])                          
@@ -356,8 +370,8 @@ and FSharpEntity(g:TcGlobals, thisCcu, tcImports: TcImports, entity:EntityRef) =
  
     member __.XmlDocSig = 
         checkIsResolved()
-        entity.XmlDocSig 
-
+        getXmlDocSigForEntity g tcImports entity
+ 
     member __.XmlDoc = 
         if isUnresolved() then XmlDoc.Empty  |> makeXmlDoc else
         entity.XmlDoc |> makeXmlDoc
@@ -462,7 +476,10 @@ and FSharpUnionCase(g:TcGlobals, thisCcu, tcImports, v: UnionCaseRef) =
 
     member __.XmlDocSig = 
         checkIsResolved()
-        v.UnionCase.XmlDocSig
+        let unionCase = UnionCaseInfo(generalizeTypars v.TyconRef.TyparsNoRange,v)
+        match ItemDescriptionsImpl.GetXmlDocSigOfUnionCaseInfo unionCase with
+        | Some (_, docsig) -> docsig
+        | _ -> ""
 
     member __.XmlDoc = 
         if isUnresolved() then XmlDoc.Empty  |> makeXmlDoc else
@@ -543,6 +560,35 @@ and FSharpField(g:TcGlobals, thisCcu, tcImports, d: FSharpFieldData)  =
         if isUnresolved() then false else 
         d.RecdField.IsMutable
 
+    member __.IsLiteral = 
+        if isUnresolved() then false else 
+        d.RecdField.LiteralValue.IsSome
+
+    member __.LiteralValue = 
+        if isUnresolved() then None else 
+        match d.RecdField.LiteralValue with
+        | Some lv ->
+            match lv with
+            | Const.Bool    v -> Some(box v)
+            | Const.SByte   v -> Some(box v)
+            | Const.Byte    v -> Some(box v)
+            | Const.Int16   v -> Some(box v)
+            | Const.UInt16  v -> Some(box v)
+            | Const.Int32   v -> Some(box v)
+            | Const.UInt32  v -> Some(box v)
+            | Const.Int64   v -> Some(box v)
+            | Const.UInt64  v -> Some(box v)
+            | Const.IntPtr  v -> Some(box v)
+            | Const.UIntPtr v -> Some(box v)
+            | Const.Single  v -> Some(box v)
+            | Const.Double  v -> Some(box v)
+            | Const.Char    v -> Some(box v)
+            | Const.String  v -> Some(box v)
+            | Const.Decimal v -> Some(box v)
+            | Const.Unit
+            | Const.Zero      -> None
+        | None -> None
+
     member __.IsVolatile = 
         if isUnresolved() then false else 
         d.RecdField.IsVolatile
@@ -553,7 +599,17 @@ and FSharpField(g:TcGlobals, thisCcu, tcImports, d: FSharpFieldData)  =
 
     member __.XmlDocSig = 
         checkIsResolved()
-        d.RecdField.XmlDocSig
+        let xmlsig =
+            match d with 
+            | Recd v -> 
+                let recd = RecdFieldInfo(generalizeTypars v.TyconRef.TyparsNoRange,v)
+                ItemDescriptionsImpl.GetXmlDocSigOfRecdFieldInfo recd
+            | Union (v,_) -> 
+                let unionCase = UnionCaseInfo(generalizeTypars v.TyconRef.TyparsNoRange,v)
+                ItemDescriptionsImpl.GetXmlDocSigOfUnionCaseInfo unionCase
+        match xmlsig with
+        | Some (_, docsig) -> docsig
+        | _ -> ""
 
     member __.XmlDoc = 
         if isUnresolved() then XmlDoc.Empty  |> makeXmlDoc else
@@ -638,7 +694,7 @@ and [<Class>] FSharpAccessibilityRights(thisCcu: CcuThunk, ad:Infos.AccessorDoma
     member internal __.Contents = ad
 
 
-and FSharpActivePatternCase(g:TcGlobals, thisCcu, tcImports, apinfo:PrettyNaming.ActivePatternInfo, n, item) = 
+and FSharpActivePatternCase(g:TcGlobals, thisCcu, tcImports, apinfo: PrettyNaming.ActivePatternInfo, typ, n, valOpt: ValRef option, item) = 
 
     inherit FSharpSymbol (g, thisCcu, tcImports,  
                           (fun () -> item),
@@ -648,6 +704,28 @@ and FSharpActivePatternCase(g:TcGlobals, thisCcu, tcImports, apinfo:PrettyNaming
 
     member __.DeclarationLocation = snd apinfo.ActiveTagsWithRanges.[n]
 
+    member __.Group = FSharpActivePatternGroup(g, thisCcu, tcImports, apinfo, typ)
+
+    member __.XmlDoc = 
+        defaultArg (valOpt |> Option.map (fun vref -> vref.XmlDoc)) XmlDoc.Empty
+        |> makeXmlDoc
+
+    member __.XmlDocSig = 
+        let xmlsig = 
+            match valOpt with
+            | Some valref -> ItemDescriptionsImpl.GetXmlDocSigOfActivePatternCase g valref
+            | None -> None
+        match xmlsig with
+        | Some (_, docsig) -> docsig
+        | _ -> ""
+
+and FSharpActivePatternGroup(g: TcGlobals, thisCcu, tcImports, apinfo:PrettyNaming.ActivePatternInfo, typ) =
+    
+    member __.Names = makeReadOnlyCollection apinfo.Names
+
+    member __.IsTotal = apinfo.IsTotal
+
+    member __.OverallType = FSharpType(g, thisCcu, tcImports, typ)
 
 and FSharpGenericParameter(g:TcGlobals, thisCcu, tcImports, v:Typar) = 
 
@@ -872,6 +950,18 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
         | Some v -> Some v.Range
         | None -> base.DeclarationLocation 
 
+    member x.Overloads =
+        checkIsResolved()
+        match d with
+        | M m ->
+            match item with
+            | Item.MethodGroup (_name, methodInfos) -> 
+                methodInfos
+                |> List.filter (fun methodInfo -> not (methodInfo.NumArgs = m.NumArgs) )
+                |> List.map (fun mi -> FSharpMemberFunctionOrValue(g, thisCcu, tcImports, M mi, item))
+                |> Some
+            | _ -> None
+        | _ -> None
 
     member x.DeclarationLocation = 
         checkIsResolved()
@@ -912,6 +1002,44 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
                 mkIteratedFunTy (List.map (mkTupledTy g) argtysl) rty
             | V v -> v.TauType
         FSharpType(g, thisCcu, tcImports,  ty)
+
+    member __.HasGetterMethod =
+        if isUnresolved() then false
+        else
+            match d with 
+            | P m -> m.HasGetter
+            | E _
+            | M _
+            | V _ -> false
+
+    member __.GetterMethod =
+        checkIsResolved()
+        match d with 
+        | P m -> 
+            let minfo = m.GetterMethod
+            FSharpMemberFunctionOrValue(g, thisCcu, tcImports, M minfo, Item.MethodGroup (minfo.DisplayName,[minfo]))
+        | E _
+        | M _
+        | V _ -> invalidOp "the value or member doesn't have an associated getter method" 
+
+    member __.HasSetterMethod =
+        if isUnresolved() then false
+        else
+            match d with 
+            | P m -> m.HasSetter
+            | E _
+            | M _
+            | V _ -> false
+
+    member __.SetterMethod =
+        checkIsResolved()
+        match d with 
+        | P m -> 
+            let minfo = m.SetterMethod
+            FSharpMemberFunctionOrValue(g, thisCcu, tcImports, M minfo, Item.MethodGroup (minfo.DisplayName,[minfo]))
+        | E _
+        | M _
+        | V _ -> invalidOp "the value or member doesn't have an associated setter method" 
 
     member __.EnclosingEntity = 
         checkIsResolved()
@@ -1070,6 +1198,15 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
         | M m -> m.IsExtensionMember
         | V v -> v.IsExtensionMember
 
+    member __.IsOverrideOrExplicitMember =
+        if isUnresolved() then false else 
+        match d with 
+        | E e -> e.GetAddMethod().IsDefiniteFSharpOverride
+        | P p -> p.IsDefiniteFSharpOverride
+        | M m -> m.IsDefiniteFSharpOverride
+        | V v -> 
+            v.MemberInfo.IsSome && v.IsDefiniteFSharpOverrideMember
+
     member __.IsImplicitConstructor = 
         if isUnresolved() then false else 
         match fsharpInfo() with 
@@ -1112,9 +1249,36 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
 
     member __.XmlDocSig = 
         checkIsResolved()
-        match fsharpInfo() with 
-        | None -> ""
-        | Some v -> v.XmlDocSig
+ 
+        match d with 
+        | E e ->
+            let amap = tcImports.GetImportMap()
+            let infoReader = InfoReader(g, amap)
+            let range = defaultArg __.DeclarationLocationOpt range0
+            match ItemDescriptionsImpl.GetXmlDocSigOfEvent infoReader range e with
+            | Some (_, docsig) -> docsig
+            | _ -> ""
+        | P p ->
+            let amap = tcImports.GetImportMap()
+            let infoReader = InfoReader(g, amap)
+            let range = defaultArg __.DeclarationLocationOpt range0
+            match ItemDescriptionsImpl.GetXmlDocSigOfProp infoReader range p with
+            | Some (_, docsig) -> docsig
+            | _ -> ""
+        | M m -> 
+            let amap = tcImports.GetImportMap()
+            let infoReader = InfoReader(g, amap)
+            let range = defaultArg __.DeclarationLocationOpt range0
+            match ItemDescriptionsImpl.GetXmlDocSigOfMethInfo infoReader range m with
+            | Some (_, docsig) -> docsig
+            | _ -> ""
+        | V v ->
+            match v.ActualParent with 
+            | Parent entityRef -> 
+                match ItemDescriptionsImpl.GetXmlDocSigOfValRef g entityRef v with
+                | Some (_, docsig) -> docsig
+                | _ -> ""
+            | ParentNone -> "" 
 
     member __.XmlDoc = 
         if isUnresolved() then XmlDoc.Empty  |> makeXmlDoc else
@@ -1130,9 +1294,9 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
         | P p -> 
             
             let amap = tcImports.GetImportMap() 
-            [ [ for (ParamData(_isParamArrayArg,_isOutArg,_optArgInfo,nmOpt,pty)) in p.GetParamDatas(amap,range0) do 
+            [ [ for (ParamData(isParamArrayArg,isOutArg,optArgInfo,nmOpt,pty)) in p.GetParamDatas(amap,range0) do 
                 let argInfo : ArgReprInfo = { Name=nmOpt; Attribs= [] }
-                yield FSharpParameter(g, thisCcu, tcImports,  pty, argInfo, x.DeclarationLocationOpt) ] 
+                yield FSharpParameter(g, thisCcu, tcImports,  pty, argInfo, x.DeclarationLocationOpt, isParamArrayArg, isOutArg, optArgInfo.IsOptional) ] 
                |> makeReadOnlyCollection  ]
            |> makeReadOnlyCollection
 
@@ -1142,9 +1306,9 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
             let amap = tcImports.GetImportMap() 
             [ for argtys in m.GetParamDatas(amap,range0,m.FormalMethodInst) do 
                  yield 
-                   [ for (ParamData(_isParamArrayArg,_isOutArg,_optArgInfo,nmOpt,pty)) in argtys do 
+                   [ for (ParamData(isParamArrayArg,isOutArg,optArgInfo,nmOpt,pty)) in argtys do 
                         let argInfo : ArgReprInfo = { Name=nmOpt; Attribs= [] }
-                        yield FSharpParameter(g, thisCcu, tcImports,  pty, argInfo, x.DeclarationLocationOpt) ] 
+                        yield FSharpParameter(g, thisCcu, tcImports,  pty, argInfo, x.DeclarationLocationOpt, isParamArrayArg, isOutArg, optArgInfo.IsOptional) ] 
                    |> makeReadOnlyCollection ]
              |> makeReadOnlyCollection
 
@@ -1159,25 +1323,28 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
             [ for argtys in argtysl do 
                  yield 
                    [ for argty, argInfo in argtys do 
-                        yield FSharpParameter(g, thisCcu, tcImports,  argty, argInfo, x.DeclarationLocationOpt) ] 
+                        let isParamArrayArg = HasFSharpAttribute g g.attrib_ParamArrayAttribute argInfo.Attribs
+                        let isOutArg = HasFSharpAttribute g g.attrib_OutAttribute argInfo.Attribs && isByrefTy g argty
+                        let isOptionalArg = HasFSharpAttribute g g.attrib_OptionalArgumentAttribute argInfo.Attribs
+                        yield FSharpParameter(g, thisCcu, tcImports,  argty, argInfo, x.DeclarationLocationOpt, isParamArrayArg, isOutArg, isOptionalArg) ] 
                    |> makeReadOnlyCollection ]
              |> makeReadOnlyCollection
 
-    member x.ReturnParameter  = 
+    member x.ReturnParameter = 
         checkIsResolved()
         match d with 
         | E e -> 
             let retInfo : ArgReprInfo = { Name=None; Attribs= [] }
             let rty = e.GetDelegateType(tcImports.GetImportMap(),range0)
-            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt) 
+            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt, isParamArrayArg=false, isOutArg=false, isOptionalArg=false) 
         | P p -> 
             let retInfo : ArgReprInfo = { Name=None; Attribs= [] }  
             let rty = p.GetPropertyType(tcImports.GetImportMap(),range0)
-            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt) 
+            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt, isParamArrayArg=false, isOutArg=false, isOptionalArg=false) 
         | M m -> 
             let retInfo : ArgReprInfo = { Name=None; Attribs= [] }
             let rty = m.GetFSharpReturnTy(tcImports.GetImportMap(),range0,m.FormalMethodInst)
-            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt) 
+            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt, isParamArrayArg=false, isOutArg=false, isOptionalArg=false) 
         | V v -> 
         match v.ValReprInfo with 
         | None -> failwith "not a module let binding or member" 
@@ -1186,7 +1353,7 @@ and FSharpMemberFunctionOrValue(g:TcGlobals, thisCcu, tcImports, d:FSharpMemberO
             let tau = v.TauType
             let _,rty = GetTopTauTypeInFSharpForm g argInfos tau range0
             
-            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt) 
+            FSharpParameter(g, thisCcu, tcImports,  rty, retInfo, x.DeclarationLocationOpt, isParamArrayArg=false, isOutArg=false, isOptionalArg=false) 
 
 
     member __.Attributes = 
@@ -1440,7 +1607,7 @@ and FSharpStaticParameter(g, thisCcu, tcImports:TcImports,  sp: Tainted< Extensi
     override x.ToString() = 
         "static parameter " + x.Name 
 
-and FSharpParameter(g, thisCcu, tcImports,  typ:TType,topArgInfo:ArgReprInfo, mOpt) = 
+and FSharpParameter(g, thisCcu, tcImports, typ:TType, topArgInfo:ArgReprInfo, mOpt, isParamArrayArg, isOutArg, isOptionalArg) = 
     inherit FSharpSymbol(g, thisCcu, tcImports,  
                          (fun () -> 
                             let m = match mOpt with Some m  -> m | None -> range0
@@ -1453,6 +1620,9 @@ and FSharpParameter(g, thisCcu, tcImports,  typ:TType,topArgInfo:ArgReprInfo, mO
     member __.Type = FSharpType(g, thisCcu, tcImports,  typ)
     member __.DeclarationLocation = match idOpt with None -> m | Some v -> v.idRange
     member __.Attributes = attribs |> List.map (fun a -> FSharpAttribute(g, thisCcu, tcImports,  a)) |> makeReadOnlyCollection
+    member __.IsParamArrayArg = isParamArrayArg
+    member __.IsOutArg = isOutArg
+    member __.IsOptionalArg = isOptionalArg
     
     member private x.ValReprInfo = topArgInfo
 
@@ -1539,13 +1709,13 @@ type FSharpSymbol with
              FSharpGenericParameter(g, thisCcu, tcImports,  tp) :> _
 
         | Item.ActivePatternCase apref -> 
-             FSharpActivePatternCase(g, thisCcu, tcImports,  apref.ActivePatternInfo, apref.CaseIndex, item) :> _
+             FSharpActivePatternCase(g, thisCcu, tcImports,  apref.ActivePatternInfo, apref.ActivePatternVal.Type, apref.CaseIndex, Some apref.ActivePatternVal, item) :> _
 
-        | Item.ActivePatternResult (apinfo,_,n,_) ->
-             FSharpActivePatternCase(g, thisCcu, tcImports,  apinfo, n, item) :> _
+        | Item.ActivePatternResult (apinfo, typ, n, _) ->
+             FSharpActivePatternCase(g, thisCcu, tcImports,  apinfo, typ, n, None, item) :> _
 
         | Item.ArgName(id,ty,_)  ->
-             FSharpParameter(g, thisCcu, tcImports,  ty, {Attribs=[]; Name=Some id}, Some id.idRange) :> _
+             FSharpParameter(g, thisCcu, tcImports,  ty, {Attribs=[]; Name=Some id}, Some id.idRange, isParamArrayArg=false, isOutArg=false, isOptionalArg=false) :> _
 
         // TODO: the following don't currently return any interesting subtype
         | Item.ImplicitOp _
