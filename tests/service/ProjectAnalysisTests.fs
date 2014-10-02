@@ -1332,7 +1332,6 @@ let ``Test project3 all uses of all signature symbols`` () =
           [("file1", ((52, 18), (52, 35)), ["defn"], ["member"; "prop"; "overridemem"])]);
          ("property BaseClassEvent",
           [("file1", ((56, 18), (56, 32)), ["defn"], ["member"; "prop"; "overridemem"])])]
-    printfn "Actual: %A" allUsesOfAllSymbols
     set allUsesOfAllSymbols - set expected |> shouldEqual Set.empty
     set expected - set allUsesOfAllSymbols |> shouldEqual Set.empty
     (set expected = set allUsesOfAllSymbols) |> shouldEqual true
@@ -3693,7 +3692,7 @@ type CFooImpl() =
     override __.AbstractMethod _ = "v"
 """
     File.WriteAllText(fileName1, fileSource1)
-
+    
     let fileNames = [fileName1]
     let args = mkProjectCommandLineArgs (dllName, fileNames)
     let options =  checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
@@ -3810,11 +3809,64 @@ let ``Test project28 all symbols in signature`` () =
               ("FSharpMemberFunctionOrValue", "AnotherEvent", "P:M.XmlDocSigTest.AnotherEvent");
               ("FSharpMemberFunctionOrValue", "AnEvent", "P:M.XmlDocSigTest.AnEvent");
               ("FSharpMemberFunctionOrValue", "AProperty", "P:M.XmlDocSigTest.AProperty");
-              ("FSharpField", "event1", "F:M.XmlDocSigTest.event1");
-              ("FSharpField", "event2", "F:M.XmlDocSigTest.event2");
-              ("FSharpField", "aString", "F:M.XmlDocSigTest.aString");
-              ("FSharpField", "anInt", "F:M.XmlDocSigTest.anInt");
+              ("FSharpField", "event1", "P:M.XmlDocSigTest.event1");
+              ("FSharpField", "event2", "P:M.XmlDocSigTest.event2");
+              ("FSharpField", "aString", "P:M.XmlDocSigTest.aString");
+              ("FSharpField", "anInt", "P:M.XmlDocSigTest.anInt");
               ("FSharpEntity", "Use", "T:M.Use");
               ("FSharpMemberFunctionOrValue", "( .ctor )", "M:M.Use.#ctor");
               ("FSharpMemberFunctionOrValue", "Test", "M:M.Use.Test``1(``0)");
               ("FSharpGenericParameter", "?", "")|]
+
+module Project29 = 
+    open System.IO
+
+    let fileName1 = Path.ChangeExtension(Path.GetTempFileName(), ".fs")
+    let base2 = Path.GetTempFileName()
+    let dllName = Path.ChangeExtension(base2, ".dll")
+    let projFileName = Path.ChangeExtension(base2, ".fsproj")
+    let fileSource1 = """
+module M
+open System.ComponentModel
+let f (x: INotifyPropertyChanged) = failwith ""            
+"""
+    File.WriteAllText(fileName1, fileSource1)
+
+    let fileNames = [fileName1]
+    let args = mkProjectCommandLineArgs (dllName, fileNames)
+    let options =  checker.GetProjectOptionsFromCommandLineArgs (projFileName, args)
+
+
+let ``Test project29 whole project errors`` () = 
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project29.options) |> Async.RunSynchronously
+    wholeProjectResults .Errors.Length |> shouldEqual 0
+
+[<Test>]
+let ``Test project29 event symbols`` () = 
+
+    let wholeProjectResults = checker.ParseAndCheckProject(Project29.options) |> Async.RunSynchronously
+    
+    let objSymbol = wholeProjectResults.GetAllUsesOfAllSymbols() |> Async.RunSynchronously |> Array.find (fun su -> su.Symbol.DisplayName = "INotifyPropertyChanged")
+    let objEntity = objSymbol.Symbol :?> FSharpEntity
+
+    let objMethodsCurriedParameterGroups = 
+        [ for x in objEntity.MembersFunctionsAndValues do 
+             for pg in x.CurriedParameterGroups do 
+                 for p in pg do
+                     yield x.CompiledName, p.Name,  p.Type.Format(objSymbol.DisplayContext) ]
+
+    objMethodsCurriedParameterGroups |> shouldEqual 
+          [("add_PropertyChanged", Some "value", "PropertyChangedEventHandler");
+           ("remove_PropertyChanged", Some "value", "PropertyChangedEventHandler")]
+   
+    // check we can get the ReturnParameter
+    let objMethodsReturnParameter = 
+        [ for x in objEntity.MembersFunctionsAndValues do 
+             let p = x.ReturnParameter 
+             yield x.DisplayName, p.Name, p.Type.Format(objSymbol.DisplayContext) ]
+    set objMethodsReturnParameter |> shouldEqual
+       (set
+           [("PropertyChanged", None, "IEvent<PropertyChangedEventHandler,PropertyChangedEventArgs>");
+           ("add_PropertyChanged", None, "unit");
+           ("remove_PropertyChanged", None, "unit")])
