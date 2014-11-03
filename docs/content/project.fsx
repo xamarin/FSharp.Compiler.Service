@@ -6,8 +6,12 @@ Compiler Services: Project Analysis
 
 This tutorial demonstrates how to can analyze a whole project using services provided by the F# compiler.
 
-> **NOTE:** The API used below is experimental and subject to change when later versions of the nuget package are published
+> **NOTE:** The FSharp.Compiler.Service API is subject to change when later versions of the nuget package are published.
 
+*)
+
+
+(**
 
 Getting whole-project results
 -----------------------------
@@ -25,7 +29,7 @@ open System.Collections.Generic
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
 // Create an interactive checker instance 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 
 (**
 Here are our sample inputs:
@@ -180,7 +184,7 @@ You can find out more about a symbol by doing type checks on various symbol kind
 
 let xSymbolAsValue = 
     match xSymbol with 
-    | :? FSharpMemberFunctionOrValue as xSymbolAsVal -> xSymbolAsVal
+    | :? FSharpMemberOrFunctionOrValue as xSymbolAsVal -> xSymbolAsVal
     | _ -> failwith "we expected this to be a member, function or value"
        
 
@@ -218,7 +222,7 @@ let parseResults1, checkAnswer1 =
 
 let checkResults1 = 
     match checkAnswer1 with 
-    | CheckFileAnswer.Succeeded x ->  x 
+    | FSharpCheckFileAnswer.Succeeded x ->  x 
     | _ -> failwith "unexpected aborted"
 
 let parseResults2, checkAnswer2 = 
@@ -227,7 +231,7 @@ let parseResults2, checkAnswer2 =
 
 let checkResults2 = 
     match checkAnswer2 with 
-    | CheckFileAnswer.Succeeded x ->  x 
+    | FSharpCheckFileAnswer.Succeeded x ->  x 
     | _ -> failwith "unexpected aborted"
 
 (**
@@ -289,11 +293,57 @@ correctly and then analyze each project in turn.
 > **NOTE:** Project references are in prototype.  Using project references may currently degrade the responsiveness of the 
   compiler service, because requests may not yet be serviced while dependent projects are being analyzed.
 
+*)
+
+(**
+
 > **NOTE:** Project references are disabled if the assembly being referred to contains type provider components - 
   specifying the project reference will have no effect beyond forcing the analysis of the project, and the DLL will 
   still be required on disk.
 
-**)
+*)
+
+(**
+Cracking a project file
+-----------------------------
+
+F# projects normally use the '.fsproj' project file format.  You can get options corresponding to a project file
+using GetProjectOptionsFromProjectFile.  In this example we get the project options for one of the 
+project files in the F# Compiler Service project itself - you should also be able to use this technique
+for any project that builds cleanly using the command line tools 'xbuild' or 'msbuild'.
+
+
+*)
+
+let projectFile  = __SOURCE_DIRECTORY__ + @"/../../src/fsharp/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj"
+
+checker.GetProjectOptionsFromProjectFile(projectFile)
+
+
+(**
+
+You can also request RELEASE mode and set other build configuration parameters:
+
+*)
+
+checker.GetProjectOptionsFromProjectFile(projectFile, [("Configuration", "Release")])
+
+(**
+
+Another utility is provided to obtain a detailed view of the resolved and processed project file. The returned object can be used to access the fully resolved references, source files that will be included during compilation, and other options.
+
+*)
+
+FSharpProjectFileInfo.Parse(projectFile, [("Configuration", "Release")])
+
+(**
+
+For debugging purposes it is also possible to obtain a detailed log from the assembly resolution process.
+
+*)
+
+let p = FSharpProjectFileInfo.Parse(projectFile, enableLogging=true)
+Console.WriteLine(p.LogOutput)
 
 (**
 Summary

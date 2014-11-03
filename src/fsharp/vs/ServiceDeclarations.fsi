@@ -19,67 +19,67 @@ open Microsoft.FSharp.Compiler.Tastops
 /// Describe a comment as either a block of text or a file+signature reference into an intellidoc file.
 //
 // Note: instances of this type do not hold any references to any compiler resources.
-type XmlComment =
-    | XmlCommentNone
-    | XmlCommentText of string
-    | XmlCommentSignature of (*File:*) string * (*Signature:*)string
+[<RequireQualifiedAccess>]
+type FSharpXmlDoc =
+    /// No documentation is available
+    | None
+    /// The text for documentation 
+    | Text of string
+    /// Indicates that the text for the documentation can be found in a .xml documentation file, using the given signature key
+    | XmlDocFileSignature of (*File:*) string * (*Signature:*)string
 
 /// A single tool tip display element
 //
 // Note: instances of this type do not hold any references to any compiler resources.
-type ToolTipElement = 
-    | ToolTipElementNone
+[<RequireQualifiedAccess>]
+type FSharpToolTipElement = 
+    | None
     /// A single type, method, etc with comment.
-    | ToolTipElement of (* text *) string * XmlComment
-    // /// A parameter of a method.
-    // | ToolTipElementParameter of string * XmlComment * string
+    | Single of (* text *) string * FSharpXmlDoc
     /// For example, a method overload group.
-    | ToolTipElementGroup of ((* text *) string * XmlComment) list
+    | Group of ((* text *) string * FSharpXmlDoc) list
     /// An error occurred formatting this element
-    | ToolTipElementCompositionError of string
+    | CompositionError of string
 
 /// Information for building a tool tip box.
 //
 // Note: instances of this type do not hold any references to any compiler resources.
-type ToolTipText = 
+type FSharpToolTipText = 
     /// A list of data tip elements to display.
-    | ToolTipText of ToolTipElement list  
+    | FSharpToolTipText of FSharpToolTipElement list  
     
-[<System.Obsolete("This type has been renamed to 'ToolTipText'")>]
-type DataTipText = ToolTipText
-
 [<Sealed>]
+/// Represents a declaration in F# source code, with information attached ready for display by an editor.
+/// Returned by GetDeclarations.
+//
 // Note: this type holds a weak reference to compiler resources. 
-type Declaration =
+type FSharpDeclarationListItem =
     /// Get the display name for the declaration.
     member Name : string
     /// Get the description text for the declaration. Commputing this property may require using compiler
     /// resources and may trigger execution of a type provider method to retrieve documentation.
     ///
     /// May return "Loading..." if timeout occurs
-    member DescriptionText : ToolTipText
+    member DescriptionText : FSharpToolTipText
     /// Get the description text, asynchronously.  Never returns "Loading...".
-    member DescriptionTextAsync : Async<ToolTipText>
+    member DescriptionTextAsync : Async<FSharpToolTipText>
     /// Get the glyph integer for the declaration as used by Visual Studio.
     member Glyph : int
     
 [<Sealed>]
-/// Represents a set of declarations returned by GetDeclarations.
+/// Represents a set of declarations in F# source code, with information attached ready for display by an editor.
+/// Returned by GetDeclarations.
 //
 // Note: this type holds a weak reference to compiler resources. 
-type DeclarationSet =
-    member Items : Declaration[]
+type FSharpDeclarationListInfo =
+    member Items : FSharpDeclarationListItem[]
 
     // Implementation details used by other code in the compiler    
-    static member internal Create : infoReader:InfoReader * m:range * denv:DisplayEnv * items:Item list * reactor:IReactorOperations * checkAlive:(unit -> bool) -> DeclarationSet
-    static member internal Error : message:string -> DeclarationSet
-    static member Empty : DeclarationSet
+    static member internal Create : infoReader:InfoReader * m:range * denv:DisplayEnv * items:Item list * reactor:IReactorOperations * checkAlive:(unit -> bool) -> FSharpDeclarationListInfo
+    static member internal Error : message:string -> FSharpDeclarationListInfo
+    static member Empty : FSharpDeclarationListInfo
 
 
-module internal TestHooks =
-    val FormatOverloadsToListScope                   : (ToolTipElement->ToolTipElement) -> System.IDisposable
-    
-    
 // implementation details used by other code in the compiler    
 module internal ItemDescriptionsImpl = 
     val isFunction : TcGlobals -> TType -> bool
@@ -93,15 +93,71 @@ module internal ItemDescriptionsImpl =
     val GetXmlDocSigOfActivePatternCase : TcGlobals -> ValRef -> (string option * string) option
     val GetXmlDocSigOfProp : InfoReader -> range -> PropInfo -> (string option * string) option
     val GetXmlDocSigOfEvent : InfoReader -> range -> EventInfo -> (string option * string) option
-    val FormatDescriptionOfItem : bool -> InfoReader -> range -> DisplayEnv -> Item -> ToolTipElement
+    val FormatDescriptionOfItem : bool -> InfoReader -> range -> DisplayEnv -> Item -> FSharpToolTipElement
     val FormatReturnTypeOfItem  : InfoReader -> range -> DisplayEnv -> Item -> string
     val RemoveDuplicateItems : TcGlobals -> Item list -> Item list
     val RemoveExplicitlySuppressed : TcGlobals -> Item list -> Item list
     val GetF1Keyword : Item -> string option
-    val rangeOfItem : TcGlobals -> bool -> Item -> range option
+    val rangeOfItem : TcGlobals -> bool option -> Item -> range option
     val fileNameOfItem : TcGlobals -> string option -> range -> Item -> string
     val FullNameOfItem : TcGlobals -> Item -> string
     val ccuOfItem : TcGlobals -> Item -> CcuThunk option
 
 
 
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListItem'")>]
+/// Renamed to FSharpDeclarationListItem
+type Declaration = FSharpDeclarationListItem
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListItem'")>]
+/// Renamed to FSharpDeclarationListItem
+type FSharpDeclaration = FSharpDeclarationListItem
+
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+/// Renamed to FSharpDeclarationListInfo
+type DeclarationGroup = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+/// Renamed to FSharpDeclarationListInfo
+type DeclarationSet = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpXmlDoc'")>]
+/// Renamed to FSharpXmlDoc
+type XmlComment = FSharpXmlDoc
+
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipElement'")>]
+/// Renamed to FSharpToolTipElement
+type ToolTipElement = FSharpToolTipElement
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+/// Renamed to FSharpDeclarationListInfo
+type FSharpDeclarationSet = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipText'")>]
+/// Renamed to FSharpToolTipText
+type ToolTipText = FSharpToolTipText
+
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipText'")>]
+/// Renamed to FSharpToolTipText
+type DataTipText = FSharpToolTipText
+
+[<AutoOpen>]
+module Obsoletes = 
+    [<System.Obsolete("The cases of this union type have been renamed to 'FSharpXmlDoc.None', 'FSharpXmlDoc.Text' or 'FSharpXmlDoc.XmlDocFileSignature'", true)>]
+    type Dummy = 
+    | XmlCommentNone 
+    | XmlCommentText of string 
+    | XmlCommentSignature of string * string 
+
+    [<System.Obsolete("The cases of this union type have been renamed to 'FSharpToolTipElement.None', 'FSharpToolTipElement.Single', 'FSharpToolTipElement.Group' or 'FSharpToolTipElement.CompositionError'",true)>]
+    type Dummy2 = 
+    | ToolTipElementNone 
+    | ToolTipElement of  string * FSharpXmlDoc 
+    | ToolTipElementGroup of (string * FSharpXmlDoc) list 
+    | ToolTipElementCompositionError of string  
+
+
+    [<System.Obsolete("The single case of this union type has been renamed to 'FSharpToolTipText'",true)>]
+    type Dummy3 = 
+        | ToolTipText of FSharpToolTipElement list  

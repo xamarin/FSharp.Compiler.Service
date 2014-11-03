@@ -26,7 +26,7 @@ exception
    with override e.Message = sprintf "Verification of '%s' failed with code %d, message <<<%s>>>" e.Data0 e.Data1 e.Data2
 
 exception 
-   CompilationError of (*assembly:*)string * (*errorCode:*)int * (*info:*)ErrorInfo []
+   CompilationError of (*assembly:*)string * (*errorCode:*)int * (*info:*)FSharpErrorInfo []
    with override e.Message = sprintf "Compilation of '%s' failed with code %d (%A)" e.Data0 e.Data1 e.Data2
 
 let runningOnMono = try System.Type.GetType("Mono.Runtime") <> null with e->  false        
@@ -102,7 +102,7 @@ type DebugMode =
     | PdbOnly
     | Full
 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 let compiler = new SimpleSourceCodeServices()
 
 /// Ensures the default FSharp.Core referenced by the F# compiler service (if none is 
@@ -276,11 +276,11 @@ module Bar
 
     // depends on FSharp.Compiler.Service
     // note : mono's pedump fails if this is a value; will not verify type initializer for module
-    let checker () = InteractiveChecker.Create()
+    let checker () = FSharpChecker.Create()
 
     printfn "done!" // make the code have some initialization effect
 """
-    let serviceAssembly = typeof<InteractiveChecker>.Assembly.Location
+    let serviceAssembly = typeof<FSharpChecker>.Assembly.Location
     let ast = parseSourceCode("bar", code)
     compileAndVerifyAst("bar", ast, [serviceAssembly])
 

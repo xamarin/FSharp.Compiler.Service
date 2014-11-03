@@ -251,7 +251,7 @@
 
 #### 0.0.61 - 
 * #216 - Return associated getters/setters from F# properties  
-* #214 - Added missing XmlDocSig for FSharpMemberFunctionOrValue's Events, Methods and Properties  
+* #214 - Added missing XmlDocSig for FSharpMemberOrFunctionOrValue's Events, Methods and Properties  
 * #213 - Retrieve information for all active pattern cases  
 * #188 - Fix leak in file handles when using multiple instances of FsiEvaluationSession, and add optionally collectible assemblies
 
@@ -261,3 +261,37 @@
 #### 0.0.63 - 
 * #221 - Normalize return types of .NET events
 
+#### 0.0.64 - 
+* Add project parser, particularly GetProjectOptionsFromProjectFile
+
+#### 0.0.65 - 
+* Fixes to project parser
+
+#### 0.0.66 - 
+* Fixes to project parser for Mono
+* Use MSBuild v12.0 for reference resolution on .NET 4.5+
+
+#### 0.0.67 - 
+* Fixes to project parser for Mono
+
+#### 0.0.70 - 
+* Make FSharpProjectFileParser public
+* Fixes to project parser for Mono (.NET 4.0 component)
+* Renamings in SourceCodeServices API for more consistent use of 'FSharp' prefix
+
+#### 0.0.71 - 
+* More renamings in SourceCodeServices API for more consistent use of 'FSharp' prefix
+
+#### 0.0.72 - 
+* Allow project parser to be used on project file with relative paths 
+* Expose attributes for non-F# symbols
+
+#### 0.0.73 - 
+* Add AssemblyContents and FSharpExpr to allow access to resolved, checked expression trees
+* Populate ReferencedProjects using ProjectFileInfo
+* Fix finding symbols declared in signature files
+* Add logging to project cracking facility
+
+#### 0.0.74 - 
+* Extension members are returned as members of current modules
+* Fix exceptions while cross-reference a type provider project 

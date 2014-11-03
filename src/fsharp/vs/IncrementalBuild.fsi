@@ -2,6 +2,7 @@
 
 namespace Microsoft.FSharp.Compiler
 
+open System
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.Range
 open Microsoft.FSharp.Compiler.ErrorLogger
@@ -11,33 +12,33 @@ open Microsoft.FSharp.Compiler.Build
 
 
 [<RequireQualifiedAccess>]
-type (*internal*) Severity = 
+type (*internal*) FSharpErrorSeverity = 
     | Warning 
     | Error
 
 [<Class>]
-type (*internal*) ErrorInfo = 
+type (*internal*) FSharpErrorInfo = 
     member FileName: string
     member StartLineAlternate:int
     member EndLineAlternate:int
-    [<System.Obsolete("This member has been replaced by StartLineAlternate, which produces 1-based line numbers rather than a 0-based line numbers. See https://github.com/fsharp/FSharp.Compiler.Service/issues/64")>]
+    [<Obsolete("This member has been replaced by StartLineAlternate, which produces 1-based line numbers rather than a 0-based line numbers. See https://github.com/fsharp/FSharp.Compiler.Service/issues/64")>]
     member StartLine:Line0
-    [<System.Obsolete("This member has been replaced by EndLineAlternate, which produces 1-based line numbers rather than a 0-based line numbers. See https://github.com/fsharp/FSharp.Compiler.Service/issues/64")>]
+    [<Obsolete("This member has been replaced by EndLineAlternate, which produces 1-based line numbers rather than a 0-based line numbers. See https://github.com/fsharp/FSharp.Compiler.Service/issues/64")>]
     member EndLine:Line0
     member StartColumn:int
     member EndColumn:int
-    member Severity:Severity
+    member Severity:FSharpErrorSeverity
     member Message:string
     member Subcategory:string
-    static member internal CreateFromExceptionAndAdjustEof : PhasedError * bool * bool * range * lastPosInFile:(int*int) -> ErrorInfo
-    static member internal CreateFromException : PhasedError * bool * bool * range -> ErrorInfo
+    static member internal CreateFromExceptionAndAdjustEof : PhasedError * bool * bool * range * lastPosInFile:(int*int) -> FSharpErrorInfo
+    static member internal CreateFromException : PhasedError * bool * bool * range -> FSharpErrorInfo
 
 // Implementation details used by other code in the compiler    
 [<Sealed>]
 type internal ErrorScope = 
-    interface System.IDisposable
+    interface IDisposable
     new : unit -> ErrorScope
-    member ErrorsAndWarnings : ErrorInfo list
+    member ErrorsAndWarnings : FSharpErrorInfo list
     static member Protect<'a> : range -> (unit->'a) -> (string->'a) -> 'a
     static member ProtectWithDefault<'a> : range -> (unit -> 'a) -> 'a -> 'a
     static member ProtectAndDiscard : range -> (unit -> unit) -> unit
@@ -54,16 +55,16 @@ module internal IncrementalFSharpBuild =
         TcGlobals: Env.TcGlobals 
         TcConfig: Build.TcConfig 
         TcEnvAtEnd : TypeChecker.TcEnv 
-        Errors : (PhasedError * bool) list 
+        Errors : (PhasedError * FSharpErrorSeverity) list 
         TcResolutions: Nameres.TcResolutions list 
-        TimeStamp: System.DateTime }
+        TimeStamp: DateTime }
 
   [<Class>]
   type IncrementalBuilder = 
 
       /// Increment the usage count on the IncrementalBuilder by 1. Ths initial usage count is 0. The returns an IDisposable which will 
       /// decrement the usage count on the entire build by 1 and dispose if it is no longer used by anyone.
-      member IncrementUsageCount : unit -> System.IDisposable
+      member IncrementUsageCount : unit -> IDisposable
      
       /// Check if the builder is not disposed
       member IsAlive : bool
@@ -133,14 +134,22 @@ module internal IncrementalFSharpBuild =
       /// This may be a long-running operation.
       ///
       // TODO: make this an Eventually (which can be scheduled) or an Async (which can be cancelled)
-      member GetCheckResultsAndImplementationsForProject : unit -> PartialCheckResults * IL.ILAssemblyRef * Build.IRawFSharpAssemblyContents option 
+      member GetCheckResultsAndImplementationsForProject : unit -> PartialCheckResults * IL.ILAssemblyRef * Build.IRawFSharpAssemblyData option * Tast.TypedAssembly option
 
       /// Get the logical time stamp that is associated with the output of the project if it were gully built immediately
-      member GetLogicalTimeStampForProject: unit -> System.DateTime
+      member GetLogicalTimeStampForProject: unit -> DateTime
 
       /// Await the untyped parse results for a particular slot in the vector of parse results.
       ///
       /// This may be a marginally long-running operation (parses are relatively quick, only one file needs to be parsed)
-      member GetParseResultsForFile : filename:string -> Ast.ParsedInput option * Range.range * string * (PhasedError * bool) list
+      member GetParseResultsForFile : filename:string -> Ast.ParsedInput option * Range.range * string * (PhasedError * FSharpErrorSeverity) list
 
-      static member TryCreateBackgroundBuilderForProjectOptions : scriptClosureOptions:LoadClosure option * sourceFiles:string list * commandLineArgs:string list * projectReferences: IProjectReference list * projectDirectory:string * useScriptResolutionRules:bool * isIncompleteTypeCheckEnvironment : bool -> IncrementalBuilder option * ErrorInfo list
+      static member TryCreateBackgroundBuilderForProjectOptions : scriptClosureOptions:LoadClosure option * sourceFiles:string list * commandLineArgs:string list * projectReferences: IProjectReference list * projectDirectory:string * useScriptResolutionRules:bool * isIncompleteTypeCheckEnvironment : bool * keepAssemblyContents: bool -> IncrementalBuilder option * FSharpErrorInfo list
+
+[<Obsolete("This type has been renamed to FSharpErrorInfo")>]
+/// Renamed to FSharpErrorInfo
+type ErrorInfo = FSharpErrorInfo
+
+[<Obsolete("This type has been renamed to FSharpErrorSeverity")>]
+/// Renamed to FSharpErrorSeverity
+type Severity = FSharpErrorSeverity

@@ -11,7 +11,7 @@ brackets and other functions in F# editors including Visual Studio, Xamarin Stud
 Similarly to [the tutorial on using untyped AST](untypedtree.html), we start by 
 getting the `InteractiveChecker` object. 
 
-> **NOTE:** The API used below is experimental and subject to change when later versions of the nuget package are published
+> **NOTE:** The FSharp.Compiler.Service API is subject to change when later versions of the nuget package are published
 
 
 Type checking sample source code
@@ -29,7 +29,7 @@ open System
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
 // Create an interactive checker instance 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 
 (**
 
@@ -95,7 +95,7 @@ the interesting functionality...
 
 let checkFileResults = 
     match checkFileAnswer with
-    | CheckFileAnswer.Succeeded(res) -> res
+    | FSharpCheckFileAnswer.Succeeded(res) -> res
     | res -> failwithf "Parsing did not finish... (%A)" res
 
 (**
@@ -154,14 +154,14 @@ This can be called on any identifier or in any scope (in which case you get a li
 in the scope) or immediately after `.` to get a list of members of some object. Here, we get a 
 list of members of the string value `msg`.
 
-To do this, we call `GetDeclarationsAlternate` with the location of the `.` symbol on the last line 
+To do this, we call `GetDeclarationListInfo` with the location of the `.` symbol on the last line 
 (ending with `printfn "%s" msg.`). The offsets are one-based, so the location is `7, 23`.
 We also need to specify a function that says that the text has not changed and the current identifer
 where we need to perform the completion.
 *)
 // Get declarations (autocomplete) for a location
 let decls = 
-    checkFileResults.GetDeclarationsAlternate
+    checkFileResults.GetDeclarationListInfo
       (Some parseFileResults, 7, 23, inputLines.[6], [], "msg", fun _ -> false)
     |> Async.RunSynchronously
 
@@ -172,7 +172,7 @@ for item in decls.Items do
 (**
 
 > **NOTE:** `v` is an alternative name for the old `GetDeclarations`. The old `GetDeclarations` was
-deprecated because it accepted zero-based line numbers.  At some point it will be removed, and  `GetDeclarationsAlternate` will be renamed back to `GetDeclarations`.
+deprecated because it accepted zero-based line numbers.  At some point it will be removed, and  `GetDeclarationListInfo` will be renamed back to `GetDeclarations`.
 *)
 
 (**

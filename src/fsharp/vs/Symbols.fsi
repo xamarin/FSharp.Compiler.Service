@@ -18,6 +18,12 @@ open Microsoft.FSharp.Compiler.Tast
 open Microsoft.FSharp.Compiler.Range
 open Microsoft.FSharp.Compiler.Build
 
+module internal Impl = 
+    type internal cenv = 
+        new : TcGlobals * thisCcu:CcuThunk * tcImports: TcImports -> cenv
+        member amap: Import.ImportMap
+        member g: TcGlobals
+
 /// Represents the information needed to format types and other information in a style
 /// suitable for use in F# source text at a particular source location.
 ///
@@ -27,11 +33,16 @@ type [<Class>] FSharpDisplayContext =
     internal new : denv: (TcGlobals -> Tastops.DisplayEnv) -> FSharpDisplayContext
     static member Empty: FSharpDisplayContext
 
-/// Represents a symbol 
+/// Represents a symbol in checked F# source code or a compiled .NET component. 
+///
+/// The subtype of the symbol may reveal further information and can be one of FSharpEntity, FSharpUnionCase
+/// FSharpField, FSharpGenericParameter, FSharpStaticParameter, FSharpMemberOrFunctionOrValue, FSharpParameter,
+/// or FSharpActivePatternCase.
 type [<Class>] FSharpSymbol = 
     /// Internal use only. 
     static member internal Create : g:TcGlobals * thisCcu: CcuThunk * tcImports: TcImports * item:Nameres.Item -> FSharpSymbol
 
+    /// Computes if the symbol is accessible for the given accessibilty rights
     member IsAccessible: FSharpAccessibilityRights -> bool
         
     member internal Item: Nameres.Item
@@ -49,9 +60,20 @@ type [<Class>] FSharpSymbol =
     /// Gets the short display name for the symbol
     member DisplayName: string
 
-    /// Get the implementation location for the symbol of it wsa declared in a signature that has an implementation
+    /// Get the implementation location for the symbol if it was declared in a signature that has an implementation
     member ImplementationLocation: range option
 
+    /// Get the signature location for the symbol if it was declared in an implementation
+    member SignatureLocation: range option
+
+    /// Return true if two symbols are effectively the same when referred to in F# source code text.  
+    /// This sees through signatures (a symbol in a signature will be considered effectively the same as 
+    /// the matching symbol in an implementation).  In addition, other equivalances are applied
+    /// when the same F# source text implies the same declaration name - for example, constructors 
+    /// are considered to be effectively the same symbol as the corresponding type definition.
+    ///
+    /// This is the relation used by GetUsesOfSymbol and GetUsesOfSymbolInFile.
+    member IsEffectivelySameAs : other: FSharpSymbol -> bool
 
 
 
@@ -87,9 +109,11 @@ and [<Class>] FSharpAssemblySignature =
     /// The (non-nested) module and type definitions in this signature
     member Entities:  IList<FSharpEntity>
 
-/// Represents a type definition or module as seen by the F# language
+/// A subtype of FSharpSymbol that represents a type definition or module as seen by the F# language
 and [<Class>] FSharpEntity = 
     inherit FSharpSymbol
+    
+    internal new : Impl.cenv * EntityRef -> FSharpEntity
 
     //   /// Return the FSharpEntity corresponding to a .NET type
     // static member FromType : System.Type -> FSharpEntity
@@ -221,9 +245,9 @@ and [<Class>] FSharpEntity =
     member BaseType : FSharpType option
 
     /// Get the properties, events and methods of a type definitions, or the functions and values of a module
-    member MembersFunctionsAndValues : IList<FSharpMemberFunctionOrValue>
+    member MembersFunctionsAndValues : IList<FSharpMemberOrFunctionOrValue>
     [<System.Obsolete("Renamed to MembersFunctionsAndValues")>]
-    member MembersOrValues : IList<FSharpMemberFunctionOrValue>
+    member MembersOrValues : IList<FSharpMemberOrFunctionOrValue>
 
     /// Get the modules and types defined in a module, or the nested types of a type
     member NestedEntities : IList<FSharpEntity>
@@ -252,6 +276,7 @@ and [<Class>] FSharpEntity =
       /// Get the declared accessibility of the representation, not taking signatures into account 
     member RepresentationAccessibility: FSharpAccessibility
 
+/// Represents a delegate signature in an F# symbol
 and [<Class>] FSharpDelegateSignature =
     /// Get the argument types of the delegate signature
     member DelegateArguments : IList<string option * FSharpType>
@@ -259,9 +284,10 @@ and [<Class>] FSharpDelegateSignature =
     /// Get the return type of the delegate signature
     member DelegateReturnType : FSharpType
 
-/// Represents a union case as seen by the F# language
+/// A subtype of FSharpSymbol that represents a union case as seen by the F# language
 and [<Class>] FSharpUnionCase =
     inherit FSharpSymbol
+    internal new : Impl.cenv * UnionCaseRef -> FSharpUnionCase
 
     /// Get the name of the union case 
     member Name: string 
@@ -294,11 +320,15 @@ and [<Class>] FSharpUnionCase =
     member IsUnresolved : bool
 
 
-/// Represents a record or union case field as seen by the F# language
+/// Renamed to FSharpField
 and [<System.Obsolete("Renamed to FSharpField")>] FSharpRecordField = FSharpField
+
+/// A subtype of FSharpSymbol that represents a record or union case field as seen by the F# language
 and [<Class>] FSharpField =
 
     inherit FSharpSymbol
+    internal new : Impl.cenv * RecdFieldRef -> FSharpField
+    internal new : Impl.cenv * UnionCaseRef * int -> FSharpField
 
     /// Get the declaring entity of this field
     member DeclaringEntity: FSharpEntity
@@ -367,9 +397,11 @@ and [<Class>] FSharpAccessibility =
     /// Indicates the symbol has internal accessibility
     member IsInternal : bool
 
+/// A subtype of FSharpSymbol that represents a generic parameter for an FSharpSymbol
 and [<Class>] FSharpGenericParameter = 
 
     inherit FSharpSymbol
+    internal new : Impl.cenv * Typar -> FSharpGenericParameter
 
     /// Get the name of the generic parameter 
     member Name: string
@@ -395,6 +427,7 @@ and [<Class>] FSharpGenericParameter =
     /// Get the declared or inferred constraints for the type parameter
     member Constraints: IList<FSharpGenericParameterConstraint> 
 
+/// A subtype of FSharpSymbol that represents a static parameter to an F# type provider
 and [<Class>] FSharpStaticParameter = 
 
     inherit FSharpSymbol
@@ -528,24 +561,31 @@ and [<RequireQualifiedAccess>] FSharpInlineAnnotation =
    /// Indictes the value is never inlined 
    | NeverInline 
 
-and [<System.Obsolete("Renamed to FSharpMemberFunctionOrValue")>] FSharpMemberOrVal =  FSharpMemberFunctionOrValue
-and [<Class>] FSharpMemberFunctionOrValue = 
+/// Renamed to FSharpMemberOrFunctionOrValue
+and [<System.Obsolete("Renamed to FSharpMemberOrFunctionOrValue")>] FSharpMemberOrVal =  FSharpMemberOrFunctionOrValue
+/// Renamed to FSharpMemberOrFunctionOrValue
+and [<System.Obsolete("Renamed to FSharpMemberOrFunctionOrValue")>] FSharpMemberFunctionOrValue =  FSharpMemberOrFunctionOrValue
+
+/// A subtype of F# symbol that represents an F# method, property, event, function or value, including extension members.
+and [<Class>] FSharpMemberOrFunctionOrValue = 
 
     inherit FSharpSymbol
+    internal new : Impl.cenv * ValRef -> FSharpMemberOrFunctionOrValue
+    internal new : Impl.cenv * Infos.MethInfo -> FSharpMemberOrFunctionOrValue
 
-    /// Indicates if the member or value is in an unresolved assembly 
+    /// Indicates if the member, function or value is in an unresolved assembly 
     member IsUnresolved : bool
 
     /// Get the enclosing entity for the definition
     member EnclosingEntity : FSharpEntity
     
-    /// Get the declaration location of the member or value
+    /// Get the declaration location of the member, function or value
     member DeclarationLocation: range
     
-    /// Get the typars of the member or value
+    /// Get the typars of the member, function or value
     member GenericParameters: IList<FSharpGenericParameter>
 
-    /// Get the full type of the member or value when used as a first class value
+    /// Get the full type of the member, function or value when used as a first class value
     member FullType: FSharpType
 
     /// Indicates if this is a compiler generated value
@@ -563,8 +603,14 @@ and [<Class>] FSharpMemberFunctionOrValue =
     /// Indicates if this is an extension member?
     member IsExtensionMember : bool
 
-    /// Indicates if this is an 'override' or explicit member (declared via 'default' keyword)?
+    [<System.Obsolete("Renamed to IsOverrideOrExplicitInterfaceImplementation")>]
     member IsOverrideOrExplicitMember : bool
+
+    /// Indicates if this is an 'override', 'default' or an explicit implementation of an interface member
+    member IsOverrideOrExplicitInterfaceImplementation : bool
+
+    /// Indicates if this is an explicit implementation of an interface member
+    member IsExplicitInterfaceImplementation : bool
 
     /// Indicates if this is a member, including extension members?
     member IsMember : bool
@@ -576,13 +622,13 @@ and [<Class>] FSharpMemberFunctionOrValue =
     member HasGetterMethod : bool
 
     /// Get an associated getter method of the property
-    member GetterMethod : FSharpMemberFunctionOrValue
+    member GetterMethod : FSharpMemberOrFunctionOrValue
 
     /// Indicates if this is a property then there exists an associated setter method
     member HasSetterMethod : bool
 
     /// Get an associated setter method of the property
-    member SetterMethod : FSharpMemberFunctionOrValue
+    member SetterMethod : FSharpMemberOrFunctionOrValue
 
     /// Indicates if this is an event member
     member IsEvent : bool
@@ -622,30 +668,30 @@ and [<Class>] FSharpMemberFunctionOrValue =
     /// Indicates if this value or member is an F# active pattern
     member IsActivePattern : bool
       
-      /// Get the member name in compiled code
+    /// Get the member name in compiled code
     member CompiledName: string
 
-      /// Get the logical name of the member
+    /// Get the logical name of the member
     member LogicalName: string
 
-      /// Get the logical enclosing entity, which for an extension member is type being extended
+    /// Get the logical enclosing entity, which for an extension member is type being extended
     member LogicalEnclosingEntity: FSharpEntity
 
-      /// Get the name as presented in F# error messages and documentation
+    /// Get the name as presented in F# error messages and documentation
     member DisplayName : string
 
     member CurriedParameterGroups : IList<IList<FSharpParameter>>
 
     member ReturnParameter : FSharpParameter
 
-      /// Custom attributes attached to the value. These contain references to other values (i.e. constructors in types). Mutable to fixup  
-      /// these value references after copying a colelction of values. 
+    /// Custom attributes attached to the value. These contain references to other values (i.e. constructors in types). Mutable to fixup  
+    /// these value references after copying a colelction of values. 
     member Attributes: IList<FSharpAttribute>
 
     /// Get the in-memory XML documentation for the value, used when code is checked in-memory
     member XmlDoc: IList<string>
 
-      /// XML documentation signature for the value, used for .xml file lookup for compiled code
+    /// XML documentation signature for the value, used for .xml file lookup for compiled code
     member XmlDocSig: string
 
      
@@ -662,20 +708,13 @@ and [<Class>] FSharpMemberFunctionOrValue =
     /// Indicates if this is a [<Literal>] value, and if so what value?
     member LiteralValue : obj // may be null
 
-      /// Get the module, type or namespace where this value appears. For 
-      /// an extension member this is the type being extended 
-    member ApparentParent: FSharpEntity
-
-     /// Get the module, type or namespace where this value is compiled
-    member ActualParent: FSharpEntity
-
 #endif
 
-      /// How visible is this? 
+    /// Get the accessibility information for the member, function or value
     member Accessibility : FSharpAccessibility
 
 
-/// Represents a parameter 
+/// A subtype of FSharpSymbol that represents a parameter 
 and [<Class>] FSharpParameter =
     inherit FSharpSymbol
 
@@ -700,9 +739,10 @@ and [<Class>] FSharpParameter =
     /// Indicate this is an optional argument
     member IsOptionalArg: bool
 
-/// Represents a single case within an active pattern
+/// A subtype of FSharpSymbol that represents a single case within an active pattern
 and [<Class>] FSharpActivePatternCase =
     inherit FSharpSymbol
+
     /// The name of the active pattern case 
     member Name: string 
 
@@ -732,6 +772,7 @@ and [<Class>] FSharpActivePatternGroup =
 and [<Class>] FSharpType =
     /// Internal use only. Create a ground type.
     internal new : g:TcGlobals * thisCcu: CcuThunk * tcImports: TcImports * typ:TType -> FSharpType
+    internal new : Impl.cenv * typ:TType -> FSharpType
 
     /// Indicates this is a named type in an unresolved assembly 
     member IsUnresolved : bool
@@ -744,12 +785,6 @@ and [<Class>] FSharpType =
 
     /// Indicates if the type is constructed using a named entity, including array and byref types
     member HasTypeDefinition : bool
-
-    [<System.Obsolete("Renamed to HasTypeDefinition")>]
-    member IsNamedType : bool
-
-    [<System.Obsolete("Renamed to TypeDefinition")>]
-    member NamedEntity : FSharpEntity 
 
     /// Get the type definition for a type 
     member TypeDefinition : FSharpEntity 
@@ -783,19 +818,30 @@ and [<Class>] FSharpType =
     /// if it is an instantiation of a generic type.
     member BaseType : FSharpType option
 
+    [<System.Obsolete("Renamed to HasTypeDefinition")>]
+    member IsNamedType : bool
 
+    [<System.Obsolete("Renamed to TypeDefinition")>]
+    member NamedEntity : FSharpEntity 
+
+
+/// Represents a custom attribute attached to F# source code or a compiler .NET component
 and [<Class>] FSharpAttribute = 
         
     /// The type of the attribute
     member AttributeType : FSharpEntity
 
     /// The arguments to the constructor for the attribute
-    member ConstructorArguments : IList<obj>
+    member ConstructorArguments : IList<FSharpType * obj>
 
     /// The named arguments for the attribute
-    member NamedArguments : IList<string * bool * obj>
+    member NamedArguments : IList<FSharpType * string * bool * obj>
 
     /// Indicates if the attribute type is in an unresolved assembly 
     member IsUnresolved : bool
+
+    /// Format the attribute using the rules of the given display context
+    member Format : context: FSharpDisplayContext -> string
+
 
 

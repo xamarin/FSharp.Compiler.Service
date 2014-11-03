@@ -19,20 +19,20 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
 
         let buildFormatComment (xmlCommentRetriever: string * string -> string) cmt (sb: StringBuilder) =
             match cmt with
-            | XmlCommentText(s) -> sb.AppendLine(s) |> ignore
-            | XmlCommentSignature(file, signature) ->
+            | FSharpXmlDoc.Text(s) -> sb.AppendLine(s) |> ignore
+            | FSharpXmlDoc.XmlDocFileSignature(file, signature) ->
                 let comment = xmlCommentRetriever (file, signature)
                 if (not (comment.Equals(null))) && comment.Length > 0 then sb.AppendLine(comment) |> ignore
-            | XmlCommentNone -> ()
+            | FSharpXmlDoc.None -> ()
 
         let buildFormatElement isSingle el (sb: StringBuilder) xmlCommentRetriever =
             match el with
-            | ToolTipElementNone -> ()
-            | ToolTipElement(it, comment) ->
+            | FSharpToolTipElement.None -> ()
+            | FSharpToolTipElement.Single(it, comment) ->
                 sb.AppendLine(it) |> buildFormatComment xmlCommentRetriever comment
             //| ToolTipElementParameter(it, comment, _) ->
             //    sb.AppendLine(it) |> buildFormatComment xmlCommentRetriever comment
-            | ToolTipElementGroup(items) ->
+            | FSharpToolTipElement.Group(items) ->
                 let items, msg =
                   if items.Length > 10 then
                     (items |> Seq.take 10 |> List.ofSeq),
@@ -43,7 +43,7 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
                 for (it, comment) in items do
                   sb.AppendLine(it) |> buildFormatComment xmlCommentRetriever comment
                 if msg <> null then sb.AppendFormat(msg) |> ignore
-            | ToolTipElementCompositionError(err) ->
+            | FSharpToolTipElement.CompositionError(err) ->
                 sb.Append("Composition error: " + err) |> ignore
 
         // Convert ToolTipText to string
@@ -51,8 +51,8 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
             let commentRetriever = defaultArg xmlCommentRetriever (fun _ -> "")
             let sb = new StringBuilder()
             match tip with
-            | ToolTipText([single]) -> buildFormatElement true single sb commentRetriever
-            | ToolTipText(its) -> for item in its do buildFormatElement false item sb commentRetriever
+            | FSharpToolTipText([single]) -> buildFormatElement true single sb commentRetriever
+            | FSharpToolTipText(its) -> for item in its do buildFormatElement false item sb commentRetriever
             sb.ToString().Trim('\n', '\r')
 
     /// Represents a declaration returned by GetDeclarations
@@ -74,8 +74,8 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
         member x.Errors = results.Errors
 
         /// Get the declarations at the given code location.
-        member x.GetDeclarationsAlternate(line, col, qualifyingNames, partialName, ?xmlCommentRetriever) =
-            async { let! items = results.GetDeclarationsAlternate(Some info, line, col, source.[int line], qualifyingNames, partialName, hasChangedSinceLastTypeCheck)
+        member x.GetDeclarationListInfo(line, col, qualifyingNames, partialName, ?xmlCommentRetriever) =
+            async { let! items = results.GetDeclarationListInfo(Some info, line, col, source.[int line], qualifyingNames, partialName, hasChangedSinceLastTypeCheck)
                     return [| for i in items.Items -> SimpleDeclaration(i.Name, (fun () -> formatTip i.DescriptionText xmlCommentRetriever)) |] }
 
         /// Get the Visual Studio F1-help keyword for the item at the given position
@@ -90,8 +90,8 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
             }
 
         /// Get the location of the declaration at the given position
-        member x.GetDeclarationLocationAlternate(line, col, names, isDecl) =
-            results.GetDeclarationLocationAlternate(line, col, source.[int line], names, isDecl)
+        member x.GetDeclarationLocationAlternate(line, col, names, preferSig) =
+            results.GetDeclarationLocationAlternate(line, col, source.[int line], names, preferSig)
 
         /// Get the full type checking results 
         member x.FullResults = results
@@ -101,9 +101,9 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
         
         member x.GetF1Keyword(line, col, names) = x.GetF1KeywordAlternate(Line.fromZ line, col, names) |> Async.RunSynchronously
         member x.GetToolTipText(line, col, names, ?xmlCommentRetriever) = x.GetToolTipTextAlternate(Line.fromZ line, col, names, ?xmlCommentRetriever=xmlCommentRetriever) |> Async.RunSynchronously
-        member x.GetDeclarationLocation(line, col, names, isDecl) = x.GetDeclarationLocationAlternate(Line.fromZ line, col, names, isDecl) |> Async.RunSynchronously
+        member x.GetDeclarationLocation(line, col, names, preferSig) = x.GetDeclarationLocationAlternate(Line.fromZ line, col, names, preferSig) |> Async.RunSynchronously
         member x.GetDataTipText(line, col, names, ?xmlCommentRetriever) = x.GetToolTipText(line, col, names, ?xmlCommentRetriever=xmlCommentRetriever) 
-        member x.GetDeclarations(line, col, qualifyingNames, partialName, ?xmlCommentRetriever) = x.GetDeclarationsAlternate(Line.fromZ line, col, qualifyingNames, partialName, ?xmlCommentRetriever=xmlCommentRetriever)
+        member x.GetDeclarations(line, col, qualifyingNames, partialName, ?xmlCommentRetriever) = x.GetDeclarationListInfo(Line.fromZ line, col, qualifyingNames, partialName, ?xmlCommentRetriever=xmlCommentRetriever)
 
     /// Provides simple services for checking and compiling F# scripts
     type public SimpleSourceCodeServices() =
@@ -125,7 +125,7 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
                 { new ErrorLogger("CompileAPI") with 
                     member x.WarnSinkImpl(exn) = errorSink true exn
                     member x.ErrorSinkImpl(exn) = errorSink false exn
-                    member x.ErrorCount = errors |> Seq.filter (fun e -> e.Severity = Severity.Error) |> Seq.length }
+                    member x.ErrorCount = errors |> Seq.filter (fun e -> e.Severity = FSharpErrorSeverity.Error) |> Seq.length }
 
             let loggerProvider = 
                 { new ErrorLoggerProvider() with 
@@ -220,8 +220,8 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
 
 
         /// Tokenize a single line, returning token information and a tokenization state represented by an integer
-        member x.TokenizeLine (line: string, state: int64) : TokenInformation[] * int64 = 
-            let tokenizer = SourceTokenizer([], "example.fsx")
+        member x.TokenizeLine (line: string, state: int64) : FSharpTokenInfo[] * int64 = 
+            let tokenizer = FSharpSourceTokenizer([], "example.fsx")
             let lineTokenizer = tokenizer.CreateLineTokenizer line
             let state = ref (None, state)
             let tokens = 
@@ -230,7 +230,7 @@ namespace Microsoft.FSharp.Compiler.SimpleSourceCodeServices
             tokens, snd !state 
 
         /// Tokenize an entire file, line by line
-        member x.TokenizeFile (source: string) : TokenInformation[][] = 
+        member x.TokenizeFile (source: string) : FSharpTokenInfo[][] = 
             let lines = source.Split('\n')
             let tokens = 
                 [| let state = ref 0L

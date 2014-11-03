@@ -59,40 +59,32 @@ type IPartialEqualityComparer<'T> =
 type iDeclarationSet = int
 
 /// Describe a comment as either a block of text or a file+signature reference into an intellidoc file.
-type (*internal*) XmlComment =
-    | XmlCommentNone
-    | XmlCommentText of string
-    | XmlCommentSignature of (*File and Signature*) string * string
+[<RequireQualifiedAccess>]
+type FSharpXmlDoc =
+    | None
+    | Text of string
+    | XmlDocFileSignature of (*File and Signature*) string * string
 
 /// A single data tip display element
-type (*internal*) ToolTipElement = 
-    | ToolTipElementNone
+[<RequireQualifiedAccess>]
+type FSharpToolTipElement = 
+    | None
     /// A single type, method, etc with comment.
-    | ToolTipElement of (* text *) string * XmlComment
+    | Single of (* text *) string * FSharpXmlDoc
     // /// A parameter of a method.
     // | ToolTipElementParameter of string * XmlComment * string
     /// For example, a method overload group.
-    | ToolTipElementGroup of ((* text *) string * XmlComment) list
+    | Group of ((* text *) string * FSharpXmlDoc) list
     /// An error occurred formatting this element
-    | ToolTipElementCompositionError of string
+    | CompositionError of string
 
 /// Information for building a data tip box.
 //
 // Note: this type does not hold any handles to compiler data structure.
-type (*internal*) ToolTipText = 
+type FSharpToolTipText = 
     /// A list of data tip elements to display.
-    | ToolTipText of ToolTipElement list  
+    | FSharpToolTipText of FSharpToolTipElement list  
 
-/// Test hooks for tweaking internals
-module internal TestHooks = 
-    /// Function used to construct member info text in data tips.
-    let FormatOverloadsToList: (ToolTipElement->ToolTipElement) option ref = ref None
-
-    let FormatOverloadsToListScope(hook:(ToolTipElement->ToolTipElement)) : System.IDisposable = 
-        FormatOverloadsToList := Some(hook)
-        {new IDisposable with
-            member d.Dispose() = 
-                FormatOverloadsToList := None}     
 
 module internal ItemDescriptionsImpl = 
 
@@ -140,62 +132,81 @@ module internal ItemDescriptionsImpl =
                     else bprintf os "  %s: %a\n" (FSComp.SR.typeInfoImplements()) bufferL supertyL))
 #endif
            
-    let rangeOfValRef isDecl (vref:ValRef) =
-        if isDecl then vref.Range else vref.ImplRange 
+    let rangeOfValRef preferFlag (vref:ValRef) =
+        match preferFlag with 
+        | None -> vref.Range 
+        | Some false -> vref.ImplRange 
+        | Some true -> vref.SigRange
 
-    let rangeOfEntityRef isDecl (eref:EntityRef) =
-        if isDecl then eref.Range else eref.ImplRange 
+    let rangeOfEntityRef preferFlag (eref:EntityRef) =
+        match preferFlag with 
+        | None -> eref.Range 
+        | Some false -> eref.ImplRange 
+        | Some true -> eref.SigRange
+
    
-    let rangeOfPropInfo isDecl (pinfo:PropInfo) =
+    let rangeOfPropInfo preferFlag (pinfo:PropInfo) =
         match pinfo with
 #if EXTENSIONTYPING 
         |   ProvidedProp(_,pi,_) -> definitionLocationOfProvidedItem pi
 #endif
-        |   _ -> pinfo.ArbitraryValRef |> Option.map (rangeOfValRef isDecl)
+        |   _ -> pinfo.ArbitraryValRef |> Option.map (rangeOfValRef preferFlag)
 
-    let rangeOfMethInfo isDecl (minfo:MethInfo) = 
+    let rangeOfMethInfo preferFlag (minfo:MethInfo) = 
         match minfo with
 #if EXTENSIONTYPING 
         |   ProvidedMeth(_,mi,_,_) -> definitionLocationOfProvidedItem mi
 #endif
-        |   _ -> minfo.ArbitraryValRef |> Option.map (rangeOfValRef isDecl)
+        |   _ -> minfo.ArbitraryValRef |> Option.map (rangeOfValRef preferFlag)
 
-    let rangeOfEventInfo isDecl (einfo:EventInfo) = 
+    let rangeOfEventInfo preferFlag (einfo:EventInfo) = 
         match einfo with
 #if EXTENSIONTYPING 
         | ProvidedEvent (_,ei,_) -> definitionLocationOfProvidedItem ei
 #endif
-        | _ -> einfo.ArbitraryValRef |> Option.map (rangeOfValRef isDecl)
+        | _ -> einfo.ArbitraryValRef |> Option.map (rangeOfValRef preferFlag)
       
     // skip all default generated constructors for structs
     let (|FilterDefaultStructCtors|) ctors =
         ctors |> List.filter (function DefaultStructCtor _ -> false | _ -> true)
 
-    let rec rangeOfItem (g:TcGlobals) isDecl d = 
+    let rangeOfUnionCaseInfo preferFlag (ucinfo:UnionCaseInfo) =      
+        match preferFlag with 
+        | None -> ucinfo.UnionCase.Range 
+        | Some false -> ucinfo.UnionCase.ImplRange 
+        | Some true -> ucinfo.UnionCase.SigRange
+
+    let rangeOfRecdFieldInfo preferFlag (rfinfo:RecdFieldInfo) =      
+        match preferFlag with 
+        | None -> rfinfo.RecdField.Range 
+        | Some false -> rfinfo.RecdField.ImplRange 
+        | Some true -> rfinfo.RecdField.SigRange
+
+    let rec rangeOfItem (g:TcGlobals) preferFlag d = 
         match d with
-        | Item.Value vref  | Item.CustomBuilder (_,vref) -> Some (rangeOfValRef isDecl vref)
-        | Item.UnionCase ucinfo        -> Some (if isDecl then ucinfo.UnionCase.Range else ucinfo.UnionCase.ImplRange) 
-        | Item.ActivePatternCase apref -> Some (rangeOfValRef isDecl apref.ActivePatternVal)
+        | Item.Value vref  | Item.CustomBuilder (_,vref) -> Some (rangeOfValRef preferFlag vref)
+        | Item.UnionCase ucinfo        -> Some (rangeOfUnionCaseInfo preferFlag ucinfo)
+        | Item.ActivePatternCase apref -> Some (rangeOfValRef preferFlag apref.ActivePatternVal)
         | Item.ExnCase tcref           -> Some tcref.Range
-        | Item.RecdField rfinfo        -> Some (if isDecl then rfinfo.RecdFieldRef.Range else rfinfo.RecdFieldRef.ImplRange)
-        | Item.Event einfo             -> rangeOfEventInfo isDecl einfo
+        | Item.RecdField rfinfo        -> Some (rangeOfRecdFieldInfo preferFlag rfinfo)
+        | Item.Event einfo             -> rangeOfEventInfo preferFlag einfo
         | Item.ILField _               -> None
-        | Item.Property(_,pinfos)      -> rangeOfPropInfo isDecl pinfos.Head 
-        | Item.Types(_,typs)     -> typs |> List.tryPick (tryNiceEntityRefOfTy >> Option.map (rangeOfEntityRef isDecl))
-        | Item.CustomOperation (_,_,Some minfo)  -> rangeOfMethInfo isDecl minfo
+        | Item.Property(_,pinfos)      -> rangeOfPropInfo preferFlag pinfos.Head 
+        | Item.Types(_,typs)     -> typs |> List.tryPick (tryNiceEntityRefOfTy >> Option.map (rangeOfEntityRef preferFlag))
+        | Item.CustomOperation (_,_,Some minfo)  -> rangeOfMethInfo preferFlag minfo
         | Item.TypeVar (_,tp)  -> Some tp.Range
-        | Item.ModuleOrNamespaces(modrefs) -> modrefs |> List.tryPick (rangeOfEntityRef isDecl >> Some)
+        | Item.ModuleOrNamespaces(modrefs) -> modrefs |> List.tryPick (rangeOfEntityRef preferFlag >> Some)
         | Item.MethodGroup(_,minfos) 
-        | Item.CtorGroup(_,FilterDefaultStructCtors(minfos)) -> minfos |> List.tryPick (rangeOfMethInfo isDecl)
+        | Item.CtorGroup(_,FilterDefaultStructCtors(minfos)) -> minfos |> List.tryPick (rangeOfMethInfo preferFlag)
         | Item.ActivePatternResult(APInfo _,_, _, m) -> Some m
-        | Item.SetterArg (_,item) -> rangeOfItem g isDecl item
+        | Item.SetterArg (_,item) -> rangeOfItem g preferFlag item
         | Item.ArgName (id,_, _) -> Some id.idRange
-        | Item.CustomOperation (_,_,implOpt) -> implOpt |> Option.bind (rangeOfMethInfo isDecl)
+        | Item.CustomOperation (_,_,implOpt) -> implOpt |> Option.bind (rangeOfMethInfo preferFlag)
         | Item.ImplicitOp _ -> None
         | Item.NewDef id -> Some id.idRange
-        | Item.UnqualifiedType tcrefs -> tcrefs |> List.tryPick (rangeOfEntityRef isDecl >> Some)
+        | Item.UnqualifiedType tcrefs -> tcrefs |> List.tryPick (rangeOfEntityRef preferFlag >> Some)
         | Item.DelegateCtor typ 
-        | Item.FakeInterfaceCtor typ -> typ |> tryNiceEntityRefOfTy |> Option.map (rangeOfEntityRef isDecl)
+        | Item.FakeInterfaceCtor typ -> typ |> tryNiceEntityRefOfTy |> Option.map (rangeOfEntityRef preferFlag)
 
     let rec ccuOfItem (g:TcGlobals) d = 
         match d with
@@ -274,8 +285,8 @@ module internal ItemDescriptionsImpl =
 
     let mkXmlComment thing =
         match thing with
-        | Some (Some(fileName), xmlDocSig) -> XmlCommentSignature(fileName, xmlDocSig)
-        | _ -> XmlCommentNone
+        | Some (Some(fileName), xmlDocSig) -> FSharpXmlDoc.XmlDocFileSignature(fileName, xmlDocSig)
+        | _ -> FSharpXmlDoc.None
 
     let GetXmlDocSigOfEntityRef infoReader m (eref:EntityRef) = 
         if eref.IsILTycon then 
@@ -389,16 +400,16 @@ module internal ItemDescriptionsImpl =
         | Item.UnionCase  ucinfo -> mkXmlComment (GetXmlDocSigOfUnionCaseInfo ucinfo)
         | Item.ExnCase tcref -> mkXmlComment (GetXmlDocSigOfEntityRef infoReader m tcref)
         | Item.RecdField rfinfo -> mkXmlComment (GetXmlDocSigOfRecdFieldInfo rfinfo)
-        | Item.NewDef _ -> XmlCommentNone
+        | Item.NewDef _ -> FSharpXmlDoc.None
         | Item.ILField(ILFieldInfo(tinfo, fdef)) -> 
               match metaInfoOfEntityRef infoReader m tinfo.TyconRef  with
               | Some (Some(ccuFileName),_,formalTypeInfo) ->
-                  XmlCommentSignature(ccuFileName,"F:"+formalTypeInfo.ILTypeRef.FullName+"."+fdef.Name)
-              | _ -> XmlCommentNone
+                  FSharpXmlDoc.XmlDocFileSignature(ccuFileName,"F:"+formalTypeInfo.ILTypeRef.FullName+"."+fdef.Name)
+              | _ -> FSharpXmlDoc.None
 
         | Item.Types(_,((TType_app(tcref,_)) :: _)) ->  mkXmlComment (GetXmlDocSigOfEntityRef infoReader m tcref)
         | Item.CustomOperation (_,_,Some minfo) -> mkXmlComment (GetXmlDocSigOfMethInfo infoReader  m minfo)
-        | Item.TypeVar _  -> XmlCommentNone
+        | Item.TypeVar _  -> FSharpXmlDoc.None
         | Item.ModuleOrNamespaces(modref :: _) -> mkXmlComment (GetXmlDocSigOfEntityRef infoReader m modref)
 
         | Item.Property(_,(pinfo :: _)) -> mkXmlComment (GetXmlDocSigOfProp infoReader m pinfo)
@@ -410,10 +421,10 @@ module internal ItemDescriptionsImpl =
                                                    | ArgumentContainer.Method(minfo) -> mkXmlComment (GetXmlDocSigOfMethInfo infoReader m minfo)
                                                    | ArgumentContainer.Type(tcref) -> mkXmlComment (GetXmlDocSigOfEntityRef infoReader m tcref)
                                                    | ArgumentContainer.UnionCase(ucinfo) -> mkXmlComment (GetXmlDocSigOfUnionCaseInfo ucinfo)
-        |  _ -> XmlCommentNone
+        |  _ -> FSharpXmlDoc.None
 
     /// Produce an XmlComment with a signature or raw text.
-    let GetXmlComment (xmlDoc:XmlDoc) (infoReader:InfoReader) m d : XmlComment = 
+    let GetXmlComment (xmlDoc:XmlDoc) (infoReader:InfoReader) m d = 
         let result = 
             match xmlDoc with 
             | XmlDoc [| |] -> ""
@@ -424,23 +435,19 @@ module internal ItemDescriptionsImpl =
                         // Note: this code runs for local/within-project xmldoc tooltips, but not for cross-project or .XML
                         bprintf os "\n%s" s))
 
-        let xml = if String.IsNullOrEmpty result then XmlCommentNone else XmlCommentText result
+        let xml = if String.IsNullOrEmpty result then FSharpXmlDoc.None else FSharpXmlDoc.Text result
         match xml with
-        | XmlCommentNone -> GetXmlDocHelpSigOfItemForLookup infoReader m d
+        | FSharpXmlDoc.None -> GetXmlDocHelpSigOfItemForLookup infoReader m d
         | _ -> xml
 
     /// Output a method info
-    let FormatOverloadsToList (infoReader:InfoReader) m denv d minfos : ToolTipElement = 
+    let FormatOverloadsToList (infoReader:InfoReader) m denv d minfos : FSharpToolTipElement = 
         let formatOne minfo = 
             let text = bufs (fun os -> NicePrint.formatMethInfoToBufferFreeStyle  infoReader.amap m denv os minfo)
             let xml = GetXmlComment (if minfo.HasDirectXmlComment then minfo.XmlDoc else XmlDoc [||]) infoReader m d 
             text,xml
 
-        let result = ToolTipElementGroup(minfos |> List.map formatOne)
-
-        match !TestHooks.FormatOverloadsToList with 
-        | Some hook -> hook result
-        | None -> result
+        FSharpToolTipElement.Group(minfos |> List.map formatOne)
 
         
     let pubpath_of_vref         (v:ValRef) = v.PublicPath        
@@ -659,7 +666,7 @@ module internal ItemDescriptionsImpl =
                     OutputUsefulTypeInfo isDecl infoReader m denv os ty)
 
             let xml = GetXmlComment (if (valRefInThisAssembly g.compilingFslib vref) then vref.XmlDoc else XmlDoc [||]) infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // Union tags (constructors)
         | Item.UnionCase ucinfo -> 
@@ -679,7 +686,7 @@ module internal ItemDescriptionsImpl =
 
 
             let xml = GetXmlComment (if (tyconRefUsesLocalXmlDoc g.compilingFslib ucinfo.TyconRef) then uc.XmlDoc else XmlDoc [||]) infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // Active pattern tag inside the declaration (result)             
         | Item.ActivePatternResult(apinfo, ty, idx, _) ->
@@ -687,7 +694,7 @@ module internal ItemDescriptionsImpl =
                 bprintf os "%s %s: " (FSComp.SR.typeInfoActivePatternResult()) (List.nth apinfo.ActiveTags idx) 
                 NicePrint.outputTy denv os ty)
             let xml = GetXmlComment (XmlDoc [||]) infoReader m d
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // Active pattern tags 
         // XmlDoc is never emitted to xml doc files for these
@@ -705,7 +712,7 @@ module internal ItemDescriptionsImpl =
                     OutputFullName isDecl pubpath_of_vref fullDisplayTextOfValRef os v)
 
             let xml = GetXmlComment v.XmlDoc infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // F# exception names
         | Item.ExnCase ecref -> 
@@ -713,7 +720,7 @@ module internal ItemDescriptionsImpl =
                 NicePrint.outputExnDef denv os ecref.Deref 
                 OutputFullName isDecl pubpath_of_tcref fullDisplayTextOfExnRef os ecref)
             let xml = GetXmlComment (if (tyconRefUsesLocalXmlDoc g.compilingFslib ecref) then ecref.XmlDoc else XmlDoc [||]) infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // F# record field names
         | Item.RecdField rfinfo ->
@@ -731,12 +738,12 @@ module internal ItemDescriptionsImpl =
                        try bprintf os " = %s" (Layout.showL ( NicePrint.layoutConst denv.g ty lit )) with _ -> ())
 
             let xml = GetXmlComment (if (tyconRefUsesLocalXmlDoc g.compilingFslib rfinfo.TyconRef) then rfield.XmlDoc else XmlDoc [||]) infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // Not used
         | Item.NewDef id -> 
             let dataTip = bufs (fun os -> bprintf os "%s %s" (FSComp.SR.typeInfoPatternVariable()) id.idText)
-            ToolTipElement(dataTip, GetXmlComment (XmlDoc [||]) infoReader m d)
+            FSharpToolTipElement.Single(dataTip, GetXmlComment (XmlDoc [||]) infoReader m d)
 
         // .NET fields
         | Item.ILField finfo ->
@@ -749,7 +756,7 @@ module internal ItemDescriptionsImpl =
                 | Some v -> 
                    try bprintf os " = %s" (Layout.showL ( NicePrint.layoutConst denv.g (finfo.FieldType(infoReader.amap, m)) (TypeChecker.TcFieldInit m v) )) 
                    with _ -> ())
-            ToolTipElement(dataTip, GetXmlComment (XmlDoc [||]) infoReader m d)
+            FSharpToolTipElement.Single(dataTip, GetXmlComment (XmlDoc [||]) infoReader m d)
 
         // .NET events
         | Item.Event einfo ->
@@ -769,7 +776,7 @@ module internal ItemDescriptionsImpl =
 
             let xml = GetXmlComment (if einfo.HasDirectXmlComment  then einfo.XmlDoc else XmlDoc [||]) infoReader m d 
 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // F# and .NET properties
         | Item.Property(_,pinfos) -> 
@@ -786,7 +793,7 @@ module internal ItemDescriptionsImpl =
 
             let xml = GetXmlComment (if pinfo.HasDirectXmlComment then pinfo.XmlDoc else XmlDoc [||]) infoReader m d 
 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // Custom operations in queries
         | Item.CustomOperation (customOpName,usageText,Some minfo) -> 
@@ -823,7 +830,7 @@ module internal ItemDescriptionsImpl =
 
             let xml = GetXmlComment (if minfo.HasDirectXmlComment then minfo.XmlDoc else XmlDoc [||]) infoReader m d 
 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // F# constructors and methods
         | Item.CtorGroup(_,minfos) 
@@ -838,7 +845,7 @@ module internal ItemDescriptionsImpl =
         | Item.FakeInterfaceCtor typ ->
            let _, typ, _ = PrettyTypes.PrettifyTypes1 g typ
            let text = bufs (fun os -> NicePrint.outputTyconRef denv os (tcrefOfAppTy g typ))
-           ToolTipElement(text, GetXmlComment (XmlDoc [||]) infoReader m d)
+           FSharpToolTipElement.Single(text, GetXmlComment (XmlDoc [||]) infoReader m d)
         
         // The 'fake' representation of constructors of .NET delegate types
         | Item.DelegateCtor delty -> 
@@ -850,7 +857,7 @@ module internal ItemDescriptionsImpl =
                          NicePrint.outputTy denv os fty
                          bprintf os ")")
            let xml = GetXmlComment (XmlDoc [||]) infoReader m d
-           ToolTipElement(text, xml)
+           FSharpToolTipElement.Single(text, xml)
 
         // Types.
         | Item.Types(_,((TType_app(tcref,_) as typ):: _)) -> 
@@ -863,7 +870,7 @@ module internal ItemDescriptionsImpl =
                     OutputUsefulTypeInfo isDecl infoReader m denv os typ)
   
             let xml = GetXmlComment (if (tyconRefUsesLocalXmlDoc g.compilingFslib tcref) then tcref.XmlDoc else XmlDoc [||]) infoReader m d 
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
 
         // F# Modules and namespaces
         | Item.ModuleOrNamespaces((modref :: _) as modrefs) -> 
@@ -889,9 +896,9 @@ module internal ItemDescriptionsImpl =
                 for i, txt in namesToAdd do
                     bprintf os "\n%s" ((if i = 0 then FSComp.SR.typeInfoFromFirst else FSComp.SR.typeInfoFromNext) txt)
                 let xml = GetXmlComment (if (entityRefInThisAssembly g.compilingFslib modref) then modref.XmlDoc else XmlDoc [||]) infoReader m d 
-                ToolTipElement(os.ToString(), xml)
+                FSharpToolTipElement.Single(os.ToString(), xml)
             else
-                ToolTipElement(os.ToString(), GetXmlComment (XmlDoc [||]) infoReader m d)
+                FSharpToolTipElement.Single(os.ToString(), GetXmlComment (XmlDoc [||]) infoReader m d)
 
         // Named parameters
         | Item.ArgName (id, argTy, argContainer) -> 
@@ -909,13 +916,13 @@ module internal ItemDescriptionsImpl =
                                if (tyconRefUsesLocalXmlDoc g.compilingFslib ucinfo.TyconRef) then ucinfo.UnionCase.XmlDoc else XmlDoc [||]
                          | _ -> XmlDoc [||]
             let xml = GetXmlComment xmldoc infoReader m d
-            ToolTipElement(text, xml)
+            FSharpToolTipElement.Single(text, xml)
             // ToolTipElementParameter(text, xml, id.idText)
             
         | Item.SetterArg (_, item) -> 
             FormatItemDescriptionToToolTipElement isDecl infoReader m denv item
         |  _ -> 
-            ToolTipElementNone
+            FSharpToolTipElement.None
 
 
     // Format the return type of an item
@@ -1136,10 +1143,10 @@ module internal ItemDescriptionsImpl =
         | Item.ActivePatternResult _ // "let (|Foo|Bar|) = .. Fo$o ..." - no keyword
             ->  None
 
-    let FormatDescriptionOfItem isDecl (infoReader:InfoReader)  m denv d : ToolTipElement = 
+    let FormatDescriptionOfItem isDecl (infoReader:InfoReader)  m denv d : FSharpToolTipElement = 
         ErrorScope.Protect m 
             (fun () -> FormatItemDescriptionToToolTipElement isDecl infoReader m denv d)
-            (fun err -> ToolTipElementCompositionError(err))
+            (fun err -> FSharpToolTipElement.CompositionError(err))
         
     let FormatReturnTypeOfItem (infoReader:InfoReader) m denv d = 
         ErrorScope.Protect m (fun () -> bufs (fun buf -> FormatItemReturnTypeToBuffer infoReader m denv buf d)) (fun err -> err)
@@ -1246,8 +1253,8 @@ open ItemDescriptionsImpl
           
 /// An intellisense declaration
 [<Sealed>]
-type Declaration(name, glyph:int, info) =
-    let mutable descriptionTextHolder:ToolTipText option = None
+type FSharpDeclarationListItem(name, glyph:int, info) =
+    let mutable descriptionTextHolder:FSharpToolTipText option = None
     let mutable task = null
 
     member decl.Name = name
@@ -1261,8 +1268,8 @@ type Declaration(name, glyph:int, info) =
                           // It is written to be robust to a disposal of an IncrementalBuilder, in which case it will just return the empty string. 
                           // It is best to think of this as a "weak reference" to the IncrementalBuilder, i.e. this code is written to be robust to its
                           // disposal. Yes, you are right to scratch your head here, but this is ok.
-                              if checkAlive() then ToolTipText(items |> Seq.toList |> List.map (FormatDescriptionOfItem true infoReader m denv))
-                              else ToolTipText [ ToolTipElement(FSComp.SR.descriptionUnavailable(), XmlCommentNone) ])
+                              if checkAlive() then FSharpToolTipText(items |> Seq.toList |> List.map (FormatDescriptionOfItem true infoReader m denv))
+                              else FSharpToolTipText [ FSharpToolTipElement.Single(FSComp.SR.descriptionUnavailable(), FSharpXmlDoc.None) ])
             | Choice2Of2 result -> 
                 async.Return result
 
@@ -1295,7 +1302,7 @@ type Declaration(name, glyph:int, info) =
 #endif
                 match descriptionTextHolder with 
                 | Some text -> text
-                | None -> ToolTipText [ ToolTipElement(FSComp.SR.loadingDescription(), XmlCommentNone) ]
+                | None -> FSharpToolTipText [ FSharpToolTipElement.Single(FSComp.SR.loadingDescription(), FSharpXmlDoc.None) ]
 
             | Choice2Of2 result -> 
                 result
@@ -1304,7 +1311,7 @@ type Declaration(name, glyph:int, info) =
       
 /// A table of declarations for Intellisense completion 
 [<Sealed>]
-type DeclarationSet(declarations: Declaration[]) = 
+type FSharpDeclarationListInfo(declarations: FSharpDeclarationListItem[]) = 
 
     member self.Items = declarations
     
@@ -1312,8 +1319,8 @@ type DeclarationSet(declarations: Declaration[]) =
 
     member self.Name i = declarations.[i].Name
 
-    member self.Description i : ToolTipText = 
-        ErrorScope.Protect Range.range0 (fun () -> declarations.[i].DescriptionText) (fun err -> ToolTipText [ToolTipElementCompositionError err])
+    member self.Description i : FSharpToolTipText = 
+        ErrorScope.Protect Range.range0 (fun () -> declarations.[i].DescriptionText) (fun err -> FSharpToolTipText [FSharpToolTipElement.CompositionError err])
 
     member self.Glyph i = declarations.[i].Glyph
             
@@ -1369,14 +1376,60 @@ type DeclarationSet(declarations: Declaration[]) =
                 match itemsWithSameName with
                 | [] -> failwith "Unexpected empty bag"
                 | items -> 
-                    new Declaration(nm, GlyphOfItem(denv,items.Head), Choice1Of2 (items, infoReader, m, denv, reactor, checkAlive)))
+                    new FSharpDeclarationListItem(nm, GlyphOfItem(denv,items.Head), Choice1Of2 (items, infoReader, m, denv, reactor, checkAlive)))
 
-        new DeclarationSet(Array.ofList decls)
+        new FSharpDeclarationListInfo(Array.ofList decls)
 
     
-    static member Error msg = new DeclarationSet([| new Declaration("<Note>", 0, Choice2Of2 (ToolTipText [ToolTipElementCompositionError msg])) |] )
-    static member Empty = new DeclarationSet([| |])
+    static member Error msg = new FSharpDeclarationListInfo([| new FSharpDeclarationListItem("<Note>", 0, Choice2Of2 (FSharpToolTipText [FSharpToolTipElement.CompositionError msg])) |] )
+    static member Empty = new FSharpDeclarationListInfo([| |])
 
      
-[<System.Obsolete("This type has been renamed to 'ToolTipText'")>]
-type DataTipText = ToolTipText
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipText'")>]
+type DataTipText = FSharpToolTipText
+
+
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListItem'")>]
+type Declaration = FSharpDeclarationListItem
+
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListItem'")>]
+type FSharpDeclaration = FSharpDeclarationListItem
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+type DeclarationGroup = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+type DeclarationSet = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpDeclarationListInfo'")>]
+type FSharpDeclarationSet = FSharpDeclarationListInfo
+
+[<System.Obsolete("This type has been renamed to 'FSharpXmlDoc'")>]
+type XmlComment = FSharpXmlDoc
+
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipElement'")>]
+type ToolTipElement = FSharpToolTipElement
+
+[<System.Obsolete("This type has been renamed to 'FSharpToolTipText'")>]
+type ToolTipText = FSharpToolTipText
+
+module Obsoletes = 
+    [<System.Obsolete("The cases of this union type have been renamed to 'FSharpXmlDoc.None', 'FSharpXmlDoc.Text' or 'FSharpXmlDoc.XmlDocFileSignature'", true)>]
+    type Dummy = 
+    | XmlCommentNone 
+    | XmlCommentText of string 
+    | XmlCommentSignature of string * string 
+
+    [<System.Obsolete("The cases of this union type have been renamed to 'FSharpToolTipElement.None', 'FSharpToolTipElement.Single', 'FSharpToolTipElement.Group' or 'FSharpToolTipElement.CompositionError'", true)>]
+    type Dummy2 = 
+    | ToolTipElementNone 
+    | ToolTipElement of  string * FSharpXmlDoc 
+    | ToolTipElementGroup of (string * FSharpXmlDoc) list 
+    | ToolTipElementCompositionError of string  
+
+
+    [<System.Obsolete("The single case of this union type has been renamed to 'FSharpToolTipText'",true)>]
+    type Dummy3 = 
+    | ToolTipText of FSharpToolTipElement list  

@@ -1,5 +1,5 @@
 (*** hide ***)
-#I "../../../bin/v45/"
+#I "../../../bin/v4.5/"
 (**
 コンパイラサービス: エディタサービス
 ====================================
@@ -11,7 +11,7 @@
 実装することができます
 (詳細については [fsharpbindings](https://github.com/fsharp/fsharpbinding) のプロジェクトを参照してください)。
 [型無しASTを使用するチュートリアル](untypedtree.html) と同じく、
-今回も `InteractiveChecker` オブジェクトを作成するところから始めます。
+今回も `FSharpChecker` オブジェクトを作成するところから始めます。
 
 > **注意:** 以下で使用しているAPIは試験的なもので、最新バージョンのnugetパッケージの
   公開に伴って変更されることがあります。
@@ -21,7 +21,7 @@
 
 [前回の(型無しASTを使った)チュートリアル](untypedtree.html) と同じく、
 `FSharp.Compiler.Service.dll` への参照を追加した後に特定の名前空間をオープンし、
-`InteractiveChecker` のインスタンスを作成します:
+`FSharpChecker` のインスタンスを作成します:
 
 *)
 // F#コンパイラAPIを参照
@@ -31,7 +31,7 @@ open System
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
 // インタラクティブチェッカーのインスタンスを作成
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 
 (**
 
@@ -56,7 +56,7 @@ let input =
 let inputLines = input.Split('\n')
 let file = "/home/user/Test.fsx"
 
-let projOptions = checker.GetProjectOptionsFromScript(file, input)
+let projOptions = checker.GetProjectOptionsFromScript(file, input) |> Async.RunSynchronously
 
 (**
 
@@ -99,7 +99,7 @@ let parseResults2, checkFileAnswer2 =
 
 let checkFileResults = 
     match checkFileAnswer with
-    | CheckFileAnswer.Succeeded(res) -> res
+    | FSharpCheckFileAnswer.Succeeded(res) -> res
     | res -> failwithf "パースが完了していません... (%A)" res
 
 (**
@@ -169,14 +169,14 @@ printfn "%A" tip
 今回は文字列の値 `msg` に対するメンバーリストを取得することにします。
 
 そのためには最終行( `printfn "%s" msg.` で終わっている行)にある
-シンボル `.` の位置を指定して `GetDeclarationsAlternate` を呼び出します。
+シンボル `.` の位置を指定して `GetDeclarationListInfo` を呼び出します。
 オフセットは1から始まるため、位置は `7, 23` になります。
 また、テキストが変更されていないことを表す関数と、
 現時点において補完する必要がある識別子を指定する必要もあります。
 *)
 // 特定の位置における宣言(自動補完)を取得する
 let decls = 
-    checkFileResults.GetDeclarationsAlternate
+    checkFileResults.GetDeclarationListInfo
       (Some parseFileResults, 7, 23, inputLines.[6], [], "msg", fun _ -> false)
     |> Async.RunSynchronously
 
@@ -185,9 +185,9 @@ for item in decls.Items do
     printfn " - %s" item.Name
 (**
 
-> **注意：** `GetDeclarationsAlternate` は古い関数 `GetDeclarations` に代わるものです。
+> **注意：** `GetDeclarationListInfo` は古い関数 `GetDeclarations` に代わるものです。
   `GetDeclarations` は0から始まる行番号を受け取るようになっていたため、非推奨になりました。
-  また、将来的には現在の `GetDeclarations` が削除され、 `GetDeclarationsAlternate` が
+  また、将来的には現在の `GetDeclarations` が削除され、 `GetDeclarationListInfo` が
   `GetDeclarations` になる予定です。
 
 コードを実行してみると、 `Substring` や `ToUpper` 、 `ToLower` といった
@@ -212,7 +212,7 @@ for item in decls.Items do
 *)
 //String.Concatメソッドのオーバーロードを取得する
 let methods = 
-    checkFileResults.GetMethodsAlternate(5, 27, inputLines.[4], Some ["String"; "Concat"])
+    checkFileResults.GetMethodsAlternate(5, 27, inputLines.[4], Some ["String"; "Concat"]) |> Async.RunSynchronously
 
 // 連結された引数リストを表示
 for mi in methods.Methods do

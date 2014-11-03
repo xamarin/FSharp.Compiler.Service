@@ -29,7 +29,7 @@
     <OutputPath>..\..\..\bin\$(TargetFrameworkVersion)</OutputPath>
     <DocumentationFile>$(OutputPath)$(AssemblyName).xml</DocumentationFile>
     <DefineConstants>$(DefineConstants);CROSS_PLATFORM_COMPILER</DefineConstants>
-    <DefineConstants>$(DefineConstants);FX_ATLEAST_45</DefineConstants>
+    <DefineConstants Condition="$(TargetFrameworkVersion) == 'v4.5'">$(DefineConstants);FX_ATLEAST_45</DefineConstants>
     <DefineConstants>$(DefineConstants);FX_ATLEAST_40</DefineConstants>
     <DefineConstants>$(DefineConstants);BE_SECURITY_TRANSPARENT</DefineConstants>
     <DefineConstants>$(DefineConstants);TYPE_PROVIDER_SECURITY</DefineConstants>
@@ -63,12 +63,6 @@
     <Optimize>true</Optimize>
     <DocumentationFile>..\..\..\bin\$(TargetFrameworkVersion)\FSharp.Compiler.Service.XML</DocumentationFile>
   </PropertyGroup>
-  <PropertyGroup Condition="$(TargetFrameworkVersion) == 'v4.0'">
-    <DefineConstants>$(DefineConstants);NET40</DefineConstants>
-  </PropertyGroup>
-  <PropertyGroup Condition="$(TargetFrameworkVersion) == 'v4.5'">
-    <DefineConstants>$(DefineConstants);NET45</DefineConstants>
-  </PropertyGroup>  
   <ItemGroup>
     <Compile Include="..\..\assemblyinfo\assemblyinfo.FSharp.Compiler.Service.dll.fs">
       <Link>AssemblyInfo/assemblyinfo.FSharp.Compiler.Service.dll.fs</Link>
@@ -76,12 +70,14 @@
     <Compile Include="..\..\assemblyinfo\assemblyinfo.shared.fs">
       <Link>AssemblyInfo/assemblyinfo.shared.fs</Link>
     </Compile>
-    <FsSrGen Include="..\FSComp.txt">
+    <FsSrGen Include="..\FSComp.txt" Condition="'$(NoFsSrGenTask)' != 'true'">
       <Link>FSComp.txt</Link>
     </FsSrGen>
-    <FsSrGen Include="..\fsi\FSIstrings.txt">
+    <FsSrGen Include="..\fsi\FSIstrings.txt" Condition="'$(NoFsSrGenTask)' != 'true'">
       <Link>FSIstrings.txt</Link>
     </FsSrGen>
+    <Compile Include="$(IntermediateOutputPath)\FSComp.fs" Condition="'$(NoFsSrGenTask)' == 'true'" />
+    <Compile Include="$(IntermediateOutputPath)\FSIstrings.fs" Condition="'$(NoFsSrGenTask)' == 'true'" />
     <EmbeddedResource Include="..\FSStrings.resx">
       <Link>FSStrings.resx</Link>
     </EmbeddedResource>
@@ -134,12 +130,6 @@
     </Compile>
     <Compile Include="..\..\utils\prim-parsing.fs">
       <Link>LexYaccRuntime/prim-parsing.fs</Link>
-    </Compile>
-    <Compile Include="..\ExtensibleDumper.fsi">
-      <Link>Utilities/ExtensibleDumper.fsi</Link>
-    </Compile>
-    <Compile Include="..\ExtensibleDumper.fs">
-      <Link>Utilities/ExtensibleDumper.fs</Link>
     </Compile>
     <Compile Include="..\..\utils\resizearray.fsi">
       <Link>Utilities/resizearray.fsi</Link>
@@ -545,6 +535,12 @@
     <Compile Include="..\vs\Symbols.fs">
       <Link>Service/Symbols.fs</Link>
     </Compile>
+    <Compile Include="..\vs\Exprs.fsi">
+      <Link>Service/Exprs.fsi</Link>
+    </Compile>
+    <Compile Include="..\vs\Exprs.fs">
+      <Link>Service/Exprs.fs</Link>
+    </Compile>
     <Compile Include="..\vs\ServiceLexing.fsi">
       <Link>Service/ServiceLexing.fsi</Link>
     </Compile>
@@ -595,11 +591,18 @@
     <Reference Include="mscorlib" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
-    <Reference Include="Microsoft.Build.Framework" />
-    <Reference Include="Microsoft.Build.Engine" />
-    <Reference Include="Microsoft.Build" />
-    <Reference Include="Microsoft.Build.Utilities.v4.0" />
-    <Reference Include="Microsoft.Build.Tasks.v4.0" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Microsoft.Build.Framework" Condition=" '$(TargetFrameworkVersion)' == 'v4.0'" />
+    <Reference Include="Microsoft.Build.Engine" Condition=" '$(TargetFrameworkVersion)' == 'v4.0'" />
+    <Reference Include="Microsoft.Build" Condition=" '$(TargetFrameworkVersion)' == 'v4.0'" />
+    <Reference Include="Microsoft.Build.Utilities.v4.0" Condition=" '$(TargetFrameworkVersion)' == 'v4.0'" />
+    <Reference Include="Microsoft.Build.Tasks.v4.0" Condition=" '$(TargetFrameworkVersion)' == 'v4.0'" />
+    
+    <Reference Include="Microsoft.Build.Framework, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
+    <Reference Include="Microsoft.Build.Engine, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
+    <Reference Include="Microsoft.Build, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
+    <Reference Include="Microsoft.Build.Utilities.v12.0" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
+    <Reference Include="Microsoft.Build.Tasks.v12.0" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
     <Reference Include="FSharp.Core, Version=$(TargetFSharpCoreVersion), Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
       <Private>False</Private>
     </Reference>

@@ -36,6 +36,10 @@
     </DocumentationFile>
   </PropertyGroup>
   <PropertyGroup>
+    <DefineConstants Condition="$(TargetFrameworkVersion) == 'v4.5'">$(DefineConstants);FX_ATLEAST_45</DefineConstants>
+    <DefineConstants>$(DefineConstants);FX_ATLEAST_40</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
   </PropertyGroup>
   <PropertyGroup>
@@ -54,9 +58,11 @@
     <Compile Include="TokenizerTests.fs" />
     <Compile Include="FileSystemTests.fs" />
     <Compile Include="ProjectAnalysisTests.fs" />
+    <Compile Include="ProjectOptionsTests.fs" />
     <Compile Include="MultiProjectAnalysisTests.fs" />
     <Compile Include="PerfTests.fs" />
     <Compile Include="InteractiveCheckerTests.fs" />
+    <Compile Include="ExprTests.fs" />
     <None Include="packages.config" />
     <None Include="app.config" />
   </ItemGroup>
@@ -80,6 +86,7 @@
     <Reference Include="System.Web" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
+    <Reference Include="Microsoft.Build, Version=12.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" Condition=" '$(TargetFrameworkVersion)' == 'v4.5'" />
   </ItemGroup>
   <Import Project="$(SolutionDir)\.nuget\NuGet.targets" Condition="Exists('$(SolutionDir)\.nuget\NuGet.targets')" />
 </Project>

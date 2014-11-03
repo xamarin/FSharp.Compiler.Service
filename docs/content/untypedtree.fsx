@@ -12,16 +12,16 @@ types and there are some ambiguities that are resolved only later by the type
 checker. You can also combine the untyped AST information with the API available
 from [editor services](editor.html). 
 
-> **NOTE:** The API used below is experimental and subject to change when later versions of the nuget package are published
+> **NOTE:** The FSharp.Compiler.Service API is subject to change when later versions of the nuget package are published
 
 
 Getting the untyped AST
 -----------------------
 
-To access the untyped AST, you need to create an instance of `InteractiveChecker`.
+To access the untyped AST, you need to create an instance of `FSharpChecker`.
 This type represents a context for type checking and parsing and corresponds either
 to a stand-alone F# script file (e.g. opened in Visual Studio) or to a loaded project
-file with multiple files. Once you have an instance of `InteractiveChecker`, you can
+file with multiple files. Once you have an instance of `FSharpChecker`, you can
 use it to perform "untyped parse" which is the first step of type-checking. The
 second phase is "typed parse" and is used by [editor services](editor.html).
 
@@ -37,12 +37,12 @@ open Microsoft.FSharp.Compiler.SourceCodeServices
 
 The untyped parse operation is very fast (compared to type checking, which can 
 take notable amount of time) and so we can perform it synchronously. First, we
-need to create `InteractiveChecker` - the constructor takes an argument that
+need to create `FSharpChecker` - the constructor takes an argument that
 can be used to notify the checker about file changes (which we ignore).
 
 *)
 // Create an interactive checker instance 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 (**
 
 To get the AST, we define a function that takes file name and the source code
@@ -70,9 +70,6 @@ let getUntypedTree (file, input) =
   | None -> failwith "Something went wrong during parsing!"
 
 (**
-The documentation for `InteractiveChecker` is currently work in progress, but
-you can find some information in the inline comments in the F# source code 
-repository ([see `service.fsi` source code](https://github.com/fsharp/fsharp/blob/fsharp_31/src/fsharp/vs/service.fsi)).
 
 Walking over the AST
 --------------------
@@ -196,7 +193,7 @@ down to expressions and patterns), we can get AST of a sample input and run the 
 Putting things together
 -----------------------
 
-As already discussed, the `getUntypedTree` function uses `InteractiveChecker` to run the first
+As already discussed, the `getUntypedTree` function uses `FSharpChecker` to run the first
 phase (parsing) on the AST and get back the tree. The function requires F# source code together
 with location of the file. The location does not have to exist (it is used only for location 
 information) and it can be in both Unix and Windows formats:

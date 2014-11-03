@@ -8,7 +8,7 @@ The `FSharp.Compiler.Service` component has a global variable
 representing the file system. By setting this variable you can host the compiler in situations where a file system
 is not available.
   
-> **NOTE:** The API used below is experimental and subject to change when later versions of the nuget package are published.
+> **NOTE:** The FSharp.Compiler.Service API is subject to change when later versions of the nuget package are published.
 
 *)
 
@@ -94,7 +94,7 @@ Doing a compilation with the FileSystem
 *)
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 
 let projectOptions = 
     let sysLib nm = 
@@ -134,7 +134,7 @@ let projectOptions =
  
     { ProjectFileName = @"c:\mycode\compilation.fsproj" // Make a name that is unique in this directory.
       ProjectFileNames = [| fileName1; fileName2 |]
-      ProjectOptions = allFlags 
+      OtherOptions = allFlags 
       ReferencedProjects = [| |]
       IsIncompleteTypeCheckEnvironment = false
       UseScriptResolutionRules = true 

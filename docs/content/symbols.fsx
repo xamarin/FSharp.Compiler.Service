@@ -7,10 +7,10 @@ Compiler Services: Working with symbols
 This tutorial demonstrates how to work with symbols provided by the F# compiler. See also [project wide analysis](project.html)
 for information on symbol references.
 
-> **NOTE:** The API used below is experimental and subject to change when later versions of the nuget package are published.
+> **NOTE:** The FSharp.Compiler.Service API is subject to change when later versions of the nuget package are published.
 
 As usual we start by referencing `FSharp.Compiler.Service.dll`, opening the relevant namespace and creating an instance
-of `InteractiveChecker`:
+of `FSharpChecker`:
 
 *)
 // Reference F# compiler API
@@ -21,7 +21,7 @@ open System.IO
 open Microsoft.FSharp.Compiler.SourceCodeServices
 
 // Create an interactive checker instance 
-let checker = InteractiveChecker.Create()
+let checker = FSharpChecker.Create()
 
 (**
 
@@ -41,7 +41,7 @@ let parseAndTypeCheckSingleFile (file, input) =
 
     // Wait until type checking succeeds (or 100 attempts)
     match checkFileResults with
-    | CheckFileAnswer.Succeeded(res) -> parseFileResults, res
+    | FSharpCheckFileAnswer.Succeeded(res) -> parseFileResults, res
     | res -> failwithf "Parsing did not finish... (%A)" res
 
 let file = "/home/user/Test.fsx"
@@ -55,7 +55,7 @@ checking of the given file through the `PartialAssemblySignature` property of th
 The full signature information is available for modules, types, attributes, members, values, functions, 
 union cases, record types, units of measure and other F# language constructs.
 
-The typed expression tree is not available via this route (as yet).
+The typed expression trees are also available, see [typed tree tutorial](typedtree.html).
 
 *)
 
